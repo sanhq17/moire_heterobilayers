@@ -37,8 +37,8 @@ class HeteroBilayer:
     A2_TRIANGULAR = np.array([0, 1.0])
     B1_TRIANGULAR = np.array([4 * np.pi / np.sqrt(3), 0.0])
     B2_TRIANGULAR = np.array([-2 * np.pi / np.sqrt(3), 2 * np.pi])
-    DK = 1e-6                   # infinitesimal k-step for derivatives in units of 1/aM
-    DX = 1e-3                   # infinitesimal x-step for derivatives in units of aM
+    DK = 1e-2                   # infinitesimal k-step for derivatives in units of 1/aM
+    DX = 1e-2                   # infinitesimal x-step for derivatives in units of aM
     DY = DX                     # infinitesimal y-step for derivatives in units of aM
 
     # ------------------------------------------------------------------
@@ -624,7 +624,12 @@ class HeteroBilayer:
         bloch *= shift[:, None, None]
         wannier = bloch.sum(axis=0) / (n_k * np.sqrt(self.A_unit_cell))
 
-        return wannier.reshape((n_w,) + orig_shape)           # (n_w, *orig_shape)
+        res = wannier.reshape((n_w,) + orig_shape)       # (n_w, *orig_shape)
+
+        if n_w == 1:
+            return res[0, :, :]                          # (*orig_shape)
+        else:
+            return res
 
     def integrate_wannier(self, fun, wannier, X, Y):
         """
@@ -677,7 +682,7 @@ class HeteroBilayer:
         N = len(k_points)
         U = U_all[0*N:1*N]                              # base states u_{nk}  (N, Nh, nb)
         U_shifted = (U_all[1*N:2*N], U_all[2*N:3*N],
-                    U_all[3*N:4*N], U_all[4*N:5*N])
+                     U_all[3*N:4*N], U_all[4*N:5*N])
 
         def make_dual(U_shift):
             S = np.einsum('kan,kam->knm', np.conj(U), U_shift)
@@ -686,6 +691,7 @@ class HeteroBilayer:
             return np.einsum('kam,kmn->kan', U_shift, Sinv)
 
         dual_xp, dual_xm, dual_yp, dual_ym = map(make_dual, U_shifted)
+
         return dual_xp, dual_xm, dual_yp, dual_ym
 
     def covariant_derivatives(self, k_points, bands=(-1,)):
@@ -756,13 +762,15 @@ class HeteroBilayer:
 
         g_xx, _, g_yy = self.quantum_metric(k_points_bz, bands)
 
-        if len(list(bands)) == 1:
-            g_xx, _, g_yy = self.quantum_metric(k_points_bz)
+        if len(bands) == 1:
             trace = g_xx + g_yy
 
             dA = dkx * dky * jac
             integral = (1 / self.A_BZ) * np.sum(trace) * dA
-        elif len(list(bands)) == 2:
+
+            return integral
+        
+        elif len(bands) == 2:
             GX = g_xx[:, 0] + g_xx[:, 1]
             GY = g_yy[:, 0] + g_yy[:, 1]
             trace = GX + GY
@@ -770,7 +778,11 @@ class HeteroBilayer:
             dA = dkx * dky * jac
             integral = (1 / self.A_BZ) * np.sum(trace) * dA
 
-        return integral
+            integral0 = (1 / self.A_BZ) * np.sum(g_xx[:, 0] + g_yy[:, 0]) * dA
+            integral1 = (1 / self.A_BZ) * np.sum(g_xx[:, 1] + g_yy[:, 1]) * dA
+
+            return integral, integral0, integral1
+        
 
     def map_to_first_BZ(self, k_points, shells=1):
         """
@@ -830,6 +842,108 @@ class HeteroBilayer:
     # Tight-binding parameters
     # ------------------------------------------------------------------
 
+    def coulomb_potential(self, r, soft=1e-2, D=1e6):
+        """
+        Coulomb potential between two points in 2D.
+
+        Parameters
+        ----------
+        r : array_like, shape (2,)  Real-space positions [Å].
+        epsilon : float  relative permitivity.
+        soft : float, optional  Softening parameter [Å]. Default is 1e-6.
+
+        Returns
+        -------
+        float  Coulomb potential [meV].
+        """
+        # Dimensionless units converted through aM
+        V0 = self.E_SQUARED / (self.epsilon * self.aM)
+        
+        if D > 1e5:
+            radial = 1 / np.sqrt(r**2 + soft**2)
+        else:
+            radial = 1 / np.sqrt(r**2 + soft**2) - 1 / np.sqrt(r**2 + D**2)
+
+        return V0 * radial
+
+    def hopping_1band(self, X, Y, k_points, orders, trial_center=np.zeros(2)):
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2)
+            elif order == 2:
+                shifts.append(self.a2 + self.a1)
+            elif order == 3:
+                shifts.append(2 * self.a2)
+
+        wannier0 = self.wannier_function(X, Y, k_points, trial_centers=[trial_center], bands=(1,))
+        wannier_xp = self.wannier_function(X + self.DX, Y, k_points, trial_centers=[trial_center], bands=(1,))
+        wannier_xm = self.wannier_function(X - self.DX, Y, k_points, trial_centers=[trial_center], bands=(1,))
+        wannier_yp = self.wannier_function(X, Y + self.DY, k_points, trial_centers=[trial_center], bands=(1,))
+        wannier_ym = self.wannier_function(X, Y - self.DY, k_points, trial_centers=[trial_center], bands=(1,))
+
+        laplacian = (wannier_xp + wannier_xm + wannier_yp + wannier_ym - 4 * wannier0) / (self.aM * self.DX)**2
+
+        hopping_integrals = []
+        for Rshift in shifts:
+            wannier2 = self.wannier_function(X, Y, k_points, trial_centers=[trial_center], bands=(1,), R0=Rshift)
+
+            integralT = 0.5 * (self.HBAR2_M / self.MSTAR) * np.trapz(
+                np.trapz(np.conj(wannier2) * laplacian, X[0,:], axis=1),
+                Y[:,0], axis=0
+            )
+
+            integralV = np.trapz(
+                np.trapz(np.conj(wannier2) * self.moire_potential(X, Y) * wannier0, X[0,:], axis=1),
+                Y[:,0], axis=0
+            )
+
+            integral = integralT + integralV
+            hopping_integrals.append(integral)
+
+        return hopping_integrals
+
+    def interaction_1band(self, X, Y, k_points, orders, trial_center=np.zeros(2)):
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2)
+            elif order == 2:
+                shifts.append(self.a2 + self.a1)
+            elif order == 3:
+                shifts.append(2 * self.a2)
+
+        dx_grid = np.abs(X[0, 1] - X[0, 0])
+        dy_grid = np.abs(Y[1, 0] - Y[0, 0])
+
+        wannier1 = self.wannier_function(X, Y, k_points, trial_centers=[trial_center], bands=(0,))
+        density1 = np.abs(wannier1)**2
+        rho1 = density1.ravel()
+
+        interactions = []
+        for Rshift in shifts:
+            wannier2 = self.wannier_function(X, Y, k_points, trial_centers=[trial_center], bands=(0,), R0=Rshift)
+
+            density2 = np.abs(wannier2)**2
+            rho2 = density2.ravel()
+
+            R = np.column_stack((X.ravel(), Y.ravel()))
+
+            dr = R[:, None, :] - R[None, :, :]
+            dist = np.linalg.norm(dr, axis=-1)
+
+            softness = np.min([dx_grid, dy_grid]) / 2
+            K = self.coulomb_potential(dist, soft=softness)      # shape (N, N)
+
+            integral = (dx_grid * dy_grid)**2 * np.dot(rho2, K @ rho1)
+            interactions.append(integral)
+
+        return interactions
+
     def hopping_integral(self, X, Y, k_points, sublattice1, sublattice2, order=1, Rshift=None):
         if order == 0:
             R0 = np.zeros(2)
@@ -879,34 +993,8 @@ class HeteroBilayer:
         integral = integralT + integralV
 
         return integral
-        
-
-
-    def coulomb_potential(self, r, soft=1e-2, D=1e6):
-        """
-        Coulomb potential between two points in 2D.
-
-        Parameters
-        ----------
-        r : array_like, shape (2,)  Real-space positions [Å].
-        epsilon : float  relative permitivity.
-        soft : float, optional  Softening parameter [Å]. Default is 1e-6.
-
-        Returns
-        -------
-        float  Coulomb potential [meV].
-        """
-        # Dimensionless units converted through aM
-        V0 = self.E_SQUARED / (self.EPSILON * self.aM)
-        
-        if D > 1e5:
-            radial = 1 / np.sqrt(r**2 + soft**2)
-        else:
-            radial = 1 / np.sqrt(r**2 + soft**2) - 1 / np.sqrt(r**2 + D**2)
-
-        return V0 * radial
     
-    def nearest_neighbour_interaction(self, X, Y, k_points, sublattice1, sublattice2, order=1, interaction="coulomb", epsilon=1.0, D=1e6, Rshift=None):
+    def nearest_neighbour_interaction(self, X, Y, k_points, sublattice1, sublattice2, order=1, D=1e6, Rshift=None):
         if order == 0:
             R0 = np.zeros(2)
         elif order == 1:
@@ -930,78 +1018,54 @@ class HeteroBilayer:
         elif sublattice2 == "B":
             ind2 = 1
 
-        if interaction == "contact":
-            wannier1 = self.wannier_wavefunction(X, Y, k_points)
-            wannier1_density = np.abs(wannier1)**2
-            wannier2 = self.wannier_wavefunction(X, Y, k_points, R0=R0)
-            wannier2_density = np.abs(wannier2)**2
+        dx_grid = np.abs(X[0, 1] - X[0, 0])
+        dy_grid = np.abs(Y[1, 0] - Y[0, 0])
 
-            integral = np.trapz(
-                np.trapz(wannier1_density * wannier2_density, X[0,:], axis=1),
-                Y[:,0],
-                axis=0
-            )
-            
-        elif interaction == "coulomb":
-            dx_grid = np.abs(X[0, 1] - X[0, 0])
-            dy_grid = np.abs(Y[1, 0] - Y[0, 0])
+        wannier1 = self.wannier_wavefunction_2band(X, Y, k_points, trial_centers= np.array([RA, RB]))[ind1, :, :]
+        wannier2 = self.wannier_wavefunction_2band(X, Y, k_points, trial_centers= np.array([RA, RB]), R0=R0)[ind2, :, :]
 
-            wannier1 = self.wannier_wavefunction_2band(X, Y, k_points, trial_centers= np.array([RA, RB]))[ind1, :, :]
-            wannier2 = self.wannier_wavefunction_2band(X, Y, k_points, trial_centers= np.array([RA, RB]), R0=R0)[ind2, :, :]
+        density1 = np.abs(wannier1)**2
+        density2 = np.abs(wannier2)**2
+        rho1 = density1.ravel()
+        rho2 = density2.ravel()
 
-            density1 = np.abs(wannier1)**2
-            density2 = np.abs(wannier2)**2
-            rho1 = density1.ravel()
-            rho2 = density2.ravel()
+        R = np.column_stack((X.ravel(), Y.ravel()))
 
-            R = np.column_stack((X.ravel(), Y.ravel()))
+        dr = R[:, None, :] - R[None, :, :]
+        dist = np.linalg.norm(dr, axis=-1)
 
-            dr = R[:, None, :] - R[None, :, :]
-            dist = np.linalg.norm(dr, axis=-1)
+        softness = np.min([dx_grid, dy_grid]) / 2
+        K = self.coulomb_potential(dist, soft=softness, D=D)      # shape (N, N)
 
-            softness = np.min([dx_grid, dy_grid])/2
-            K = self.coulomb_potential(dist, epsilon, soft=softness, D=D)      # shape (N, N)
-
-            integral = (dx_grid * dy_grid)**2 * np.dot(rho2, K @ rho1)
-
-        else:
-            integral = 0
+        integral = (dx_grid * dy_grid)**2 * np.dot(rho2, K @ rho1)
         
         return integral
     
-    def exchange_interaction(self, X, Y, k_points, order=1, interaction="coulomb", epsilon=1.0):
+    def exchange_interaction(self, X, Y, k_points, order=1, D=1e6):
         if order == 0:
             R0 = np.zeros(2)
         elif order == 1:
             R0 = self.a2
         elif order == 2:
             R0 = self.a2 + self.a1
-
-        if interaction == "contact":
-            # TODO: Implement exchange interaction for contact interaction
-            integral = 0
             
-        elif interaction == "coulomb":
-            dx_grid = np.abs(X[0, 1] - X[0, 0])
-            dy_grid = np.abs(Y[1, 0] - Y[0, 0])
+        dx_grid = np.abs(X[0, 1] - X[0, 0])
+        dy_grid = np.abs(Y[1, 0] - Y[0, 0])
 
-            wannier1 = self.wannier_wavefunction(X, Y, k_points)
-            wannier2 = self.wannier_wavefunction(X, Y, k_points, R0=R0)
+        wannier1 = self.wannier_wavefunction(X, Y, k_points)
+        wannier2 = self.wannier_wavefunction(X, Y, k_points, R0=R0)
 
-            A = np.conj(wannier1) * wannier2
-            a = A.ravel()
+        A = np.conj(wannier1) * wannier2
+        a = A.ravel()
 
-            R = np.column_stack((X.ravel(), Y.ravel()))
+        R = np.column_stack((X.ravel(), Y.ravel()))
 
-            dr = R[:, None, :] - R[None, :, :]
-            dist = np.linalg.norm(dr, axis=-1)
+        dr = R[:, None, :] - R[None, :, :]
+        dist = np.linalg.norm(dr, axis=-1)
 
-            softness = np.min([dx_grid, dy_grid])/2
-            K = self.coulomb_potential(dist, epsilon, soft=softness)      # shape (N, N)
+        softness = np.min([dx_grid, dy_grid])/2
+        K = self.coulomb_potential(dist, soft=softness, D=D)      # shape (N, N)
 
-            integral = (dx_grid * dy_grid)**2 * np.vdot(a, K @ a)
-
-        else:
-            integral = 0
+        integral = (dx_grid * dy_grid)**2 * np.vdot(a, K @ a)
         
         return integral

@@ -34,14 +34,16 @@ class Moire:
     psi_deg  : float  Moiré potential phase [degrees]. Default −94°.
     n_shells : int    Number of reciprocal-lattice shells to include
                       in the plane-wave basis. Default 6.
+    epsilon_sim: float  Effective dielectric constant for Coulomb interactions. Default 15.
     """
 
-    def __init__(self, a0=3.32, theta_deg=2.0, V=6.6, psi_deg=-94.0, n_shells=6):
+    def __init__(self, a0=3.32, theta_deg=2.0, V=6.6, psi_deg=-94.0, n_shells=6, epsilon_sim=15):
         self.a0 = a0
         self.theta_deg = theta_deg
         self.V = V
         self.psi_deg = psi_deg
         self.n_shells = n_shells
+        self.epsilon_sim = epsilon_sim
 
     # ------------------------------------------------------------------
     # Angles
@@ -815,8 +817,10 @@ class Moire:
         
         return k_points.reshape(-1, k_points.shape[-1]), dkx, dky, jac
     
-    def hopping_integral(self, X, Y, k_points, order=1, trial_center=np.zeros(2), Rshift=np.zeros(2)):
-        if order == 1:
+    def hopping_integral(self, X, Y, k_points, order=1, trial_center=np.zeros(2), Rshift=None):
+        if order == 0:
+            R0 = np.zeros(2)
+        elif order == 1:
             R0 = self.a2
         elif order == 2:
             R0 = self.a2 + self.a1
@@ -851,6 +855,32 @@ class Moire:
 
         return integral
 
+    def hopping_integral_kspace(self, k_points, order=1, band_index=0):
+        """
+        energies: array of shape (Nk,) or (Nk, n_bands) — the eigenvalues
+                E_n(k) used to build the Wannier function (same band,
+                same k-grid as in wannier_wavefunction).
+        k_points: array of shape (Nk, 2)
+        """
+        if order == 0:
+            R0 = np.zeros(2)
+        elif order == 1:
+            R0 = self.a2
+        elif order == 2:
+            R0 = self.a2 + self.a1
+        elif order == 3:
+            R0 = 2 * self.a2
+
+        bands, _ = self.calculate_bands(k_points)   # bands: (n_pts, N), meV
+        Ek = bands[:, band_index]                # (n_pts,)
+
+        N = k_points.shape[0]
+        phase = np.exp(1j * (k_points @ R0))   # k·R0 for every k
+
+        t_R = np.sum(Ek * phase) / N
+
+        return t_R
+
     def coulomb_potential(self, r, epsilon, soft, D=1e6):
         """
         Coulomb potential between two points in 2D.
@@ -875,19 +905,22 @@ class Moire:
         return V0 * radial
     
     def nearest_neighbour_interaction(self, X, Y, k_points, order=1, epsilon=1.0, D=1e6, Rshift=None):
-        if order == 1:
+        if order == 0:
+            R0 = np.zeros(2)
+        elif order == 1:
             R0 = self.a2
         elif order == 2:
             R0 = self.a2 + self.a1
         elif order == 3:
             R0 = 2 * self.a2
 
+
         if Rshift is not None:
             R0 = Rshift
 
         dx_grid = np.abs(X[0, 1] - X[0, 0])
         dy_grid = np.abs(Y[1, 0] - Y[0, 0])
-        softness = np.min([dx_grid, dy_grid])/2
+        softness = np.min([dx_grid, dy_grid]) / 2
 
         wannier1 = self.wannier_wavefunction(X, Y, k_points)
         wannier2 = self.wannier_wavefunction(X, Y, k_points, R0=R0)
@@ -937,6 +970,29 @@ class Moire:
         
         return integral
 
+
+    def get_spin_coupling(self):
+        scale = 5.0
+
+        Nx = 80
+        Ny = 80
+        resk = 15
+        D_gate = 1e6
+
+        k_points = self.mesh_k_unit_cell(Nx=resk, Ny=resk)
+        x = np.linspace(-scale * self.aM, scale * self.aM, Nx)
+        y = np.linspace(-scale * self.aM, scale * self.aM, Ny)
+        X, Y = np.meshgrid(x, y)
+
+        exchange = self.exchange_interaction(X, Y, k_points, order=1, D=D_gate, epsilon=self.epsilon_sim)
+        t1 = self.hopping_integral_kspace(k_points)#self.hopping_integral(X, Y, k_points, order=1)
+        U0 = self.nearest_neighbour_interaction(X, Y, k_points, order=0, D=D_gate, epsilon=self.epsilon_sim)
+        ref_energy = utils.HBAR2_M * np.linalg.norm(self.kappa)**2
+
+        J = (4 * (t1**2) / U0) - 2 * exchange
+        J /= ref_energy
+
+        return J
     
     # ------------------------------------------------------------------
     # Plotting functions

@@ -36,12 +36,13 @@ class Moire:
                       in the plane-wave basis. Default 6.
     """
 
-    def __init__(self, a0=3.32, theta_deg=2.0, V=6.6, psi_deg=-94.0, n_shells=6):
+    def __init__(self, a0=3.32, theta_deg=2.0, V=6.6, psi_deg=-94.0, n_shells=6, epsilon_sim=15):
         self.a0 = a0
         self.theta_deg = theta_deg
         self.V = V
         self.psi_deg = psi_deg
         self.n_shells = n_shells
+        self.epsilon_sim = epsilon_sim
 
     # ------------------------------------------------------------------
     # Angles
@@ -699,7 +700,7 @@ class Moire:
             C[kk] = O[kk] @ S_inv_sqrt                        # (alpha, i)
         self._last_smin = smin.min()                          # conditioning monitor
 
-        # --- gauge-fixed plane-wave coeffs: ztilde^i_{kG} = sum_a C_{a i} (z^a_{kG})*
+        # --- gauge-fixed plane-wave coeffs: ztilde^i_{kG} = sum_a C_{a i} (z^a_{kG})
         ztilde = np.einsum('kai,kGa->kGi', C, zk)    # (n_k, N, n_w)
 
         # --- step 5/6: Wannier functions W_i(r) = (1/sqrt(N)) sum_k sum_G ztilde e^{i(k+G).r}
@@ -903,7 +904,126 @@ class Moire:
         integral = integralT + integralV
 
         return integral
-        
+
+
+    def wannier_hamiltonian_kspace(self, k_points, trial_centers, band_indices=(-2, -1)):
+        """
+        Construct the Hamiltonian in the Wannier gauge.
+
+        Returns
+        -------
+        H_W : ndarray
+            Shape (Nk, n_w, n_w)
+            Wannier-gauge Bloch Hamiltonian H^W(k).
+        """
+
+        k_points = np.asarray(k_points)
+        trial_centers = np.asarray(trial_centers)
+
+        n_k = len(k_points)
+        n_w = len(trial_centers)
+        bands = list(band_indices)
+
+        # ------------------------------------------------------------
+        # 1. Diagonalize H(k)
+        # ------------------------------------------------------------
+        H_all = self.H_k_all(k_points)          # (Nk, Nbasis, Nbasis)
+
+        energies, eigenvectors = np.linalg.eigh(H_all)
+
+        # Selected bands
+        E = energies[:, bands]                  # (Nk, n_w)
+
+        zk = eigenvectors[:, :, bands]          # (Nk, Nbasis, n_w)
+
+        # ------------------------------------------------------------
+        # 2. Construct projection matrix O(k)
+        # ------------------------------------------------------------
+        g_vecs = np.array([g for g, _ in self.basis]) / self.aM
+
+        kG = (
+            k_points[:, None, :]
+            + g_vecs[None, :, :]
+        )                                       # (Nk, Nbasis, 2)
+
+        tphase = np.exp(
+            -1j * np.einsum(
+                'kGd,id->kGi',
+                kG,
+                trial_centers
+            )
+        )
+
+        O = np.einsum(
+            'kGa,kGi->kai',
+            np.conj(zk),
+            tphase
+        )                                       # (Nk, n_w, n_w)
+
+        # ------------------------------------------------------------
+        # 3. Löwdin orthonormalization
+        # ------------------------------------------------------------
+        C = np.empty_like(O)
+
+        for kk in range(n_k):
+
+            S = O[kk].conj().T @ O[kk]
+
+            d, V = np.linalg.eigh(S)
+
+            d = np.maximum(d, 1e-12)
+
+            S_inv_sqrt = (
+                V
+                @ np.diag(1.0 / np.sqrt(d))
+                @ V.conj().T
+            )
+
+            C[kk] = O[kk] @ S_inv_sqrt
+
+        # ------------------------------------------------------------
+        # 4. Hamiltonian in Wannier gauge
+        # ------------------------------------------------------------
+        H_W = np.einsum(
+            'kna,kn,knb->kab',
+            np.conj(C),
+            E,
+            C
+        )
+
+        return H_W
+
+    def hopping_from_wannier_gauge(self, k_points, trial_centers, R, band_indices=(-2, -1)):
+        """
+        Calculate t_{alpha,beta}(R) from the Wannier-gauge
+        Hamiltonian.
+
+        Returns
+        -------
+        t_R : ndarray
+            Shape (n_w, n_w)
+        """
+
+        k_points = np.asarray(k_points)
+        R = np.asarray(R)
+
+        H_W = self.wannier_hamiltonian_kspace(
+            k_points,
+            trial_centers,
+            band_indices=band_indices,
+        )
+
+        phase = np.exp(
+            1j * (k_points @ R)
+        )
+
+        t_R = np.einsum(
+            'k,kab->ab',
+            phase,
+            H_W
+        ) / len(k_points)
+
+        return t_R
 
 
     def coulomb_potential(self, r, epsilon, soft=1e-2, D=1e6):
@@ -933,6 +1053,8 @@ class Moire:
         if order == 0:
             R0 = np.zeros(2)
         elif order == 1:
+            R0 = self.a2 - self.a1
+        elif order == 2:
             R0 = self.a2 - self.a1
 
         if Rshift is not None:
@@ -984,7 +1106,7 @@ class Moire:
             dr = R[:, None, :] - R[None, :, :]
             dist = np.linalg.norm(dr, axis=-1)
 
-            softness = np.min([dx_grid, dy_grid])/2
+            softness = np.min([dx_grid, dy_grid]) / 2
             K = self.coulomb_potential(dist, epsilon, soft=softness, D=D)      # shape (N, N)
 
             integral = (dx_grid * dy_grid)**2 * np.dot(rho2, K @ rho1)
@@ -994,13 +1116,30 @@ class Moire:
         
         return integral
     
-    def exchange_interaction(self, X, Y, k_points, order=1, interaction="coulomb", epsilon=1.0):
+    def exchange_interaction(self, X, Y, k_points, sublattice1, sublattice2, order=1, interaction="coulomb", epsilon=1.0, D=1e6, Rshift=None):
         if order == 0:
             R0 = np.zeros(2)
         elif order == 1:
-            R0 = self.a2
+            R0 = self.a2 - self.a1
         elif order == 2:
-            R0 = self.a2 + self.a1
+            R0 = self.a2 - self.a1
+
+        ## Trial functions centers
+        RA = np.zeros(2)
+        v2 = self.a1.copy()
+        v2[1] = - v2[1]
+        RB = (self.a1 + v2) / 3
+        ##
+
+        if sublattice1 == "A":
+            ind1 = 0
+        elif sublattice1 == "B":
+            ind1 = 1
+
+        if sublattice2 == "A":
+            ind2 = 0
+        elif sublattice2 == "B":
+            ind2 = 1
 
         if interaction == "contact":
             # TODO: Implement exchange interaction for contact interaction
@@ -1010,8 +1149,8 @@ class Moire:
             dx_grid = np.abs(X[0, 1] - X[0, 0])
             dy_grid = np.abs(Y[1, 0] - Y[0, 0])
 
-            wannier1 = self.wannier_wavefunction(X, Y, k_points)
-            wannier2 = self.wannier_wavefunction(X, Y, k_points, R0=R0)
+            wannier1 = self.wannier_wavefunction_2band(X, Y, k_points, trial_centers= np.array([RA, RB]))[ind1, :, :]
+            wannier2 = self.wannier_wavefunction_2band(X, Y, k_points, trial_centers= np.array([RA, RB]), R0=R0)[ind2, :, :]
 
             A = np.conj(wannier1) * wannier2
             a = A.ravel()
@@ -1021,8 +1160,8 @@ class Moire:
             dr = R[:, None, :] - R[None, :, :]
             dist = np.linalg.norm(dr, axis=-1)
 
-            softness = np.min([dx_grid, dy_grid])/2
-            K = self.coulomb_potential(dist, epsilon, soft=softness)      # shape (N, N)
+            softness = np.min([dx_grid, dy_grid]) / 2
+            K = self.coulomb_potential(dist, epsilon, soft=softness, D=D)      # shape (N, N)
 
             integral = (dx_grid * dy_grid)**2 * np.vdot(a, K @ a)
 
@@ -1030,6 +1169,73 @@ class Moire:
             integral = 0
         
         return integral
+
+    def get_spin_coupling(self):
+        scale = 8.0
+
+        Nx = 100
+        Ny = 100
+        resk = 21
+        D_gate = 1e6
+
+        k_points = self.mesh_k_unit_cell(Nx=resk, Ny=resk)
+        x = np.linspace(-scale * self.aM, scale * self.aM, Nx)
+        y = np.linspace(-scale * self.aM, scale * self.aM, Ny)
+        X, Y = np.meshgrid(x, y)
+
+        # Need: XAA
+
+        ## Trial functions centers
+        RA = np.zeros(2)
+        v2 = self.a1.copy()
+        v2[1] = - v2[1]
+        RB = (self.a1 + v2) / 3
+        ##
+
+        R = np.zeros(2)   # or whichever A -> B displacement you want
+        
+        trial_centers = np.array([RA, RB])
+        T0 = self.hopping_from_wannier_gauge(
+            k_points=k_points,
+            trial_centers=trial_centers,
+            R=R,
+            band_indices=(-2, -1),
+        )
+
+        eA = T0[0, 0]
+        eB = T0[1, 1]
+        tAB = T0[0, 1]
+        Delta = eB - eA
+
+        R = self.a1   # or whichever A -> B displacement you want
+
+        trial_centers = np.array([RA, RB])
+        T1 = self.hopping_from_wannier_gauge(
+            k_points=k_points,
+            trial_centers=trial_centers,
+            R=R,
+            band_indices=(-2, -1),
+        )
+        tAA = T1[0, 0] + eA
+
+        scale = 5.0
+
+        Nx = 80
+        Ny = 80
+        x = np.linspace(-scale * self.aM, scale * self.aM, Nx)
+        y = np.linspace(-scale * self.aM, scale * self.aM, Ny)
+        X, Y = np.meshgrid(x, y)
+
+        UA = self.nearest_neighbour_interaction(X, Y, k_points, sublattice1="A", sublattice2="A", order=0, epsilon=self.epsilon_sim)
+        UB = self.nearest_neighbour_interaction(X, Y, k_points, sublattice1="B", sublattice2="B", order=0, epsilon=self.epsilon_sim)
+        exchangeA = self.exchange_interaction(X, Y, k_points, sublattice1="A", sublattice2="A", order=1, epsilon=self.epsilon_sim)
+        
+        ref_energy = utils.HBAR2_M * np.linalg.norm(self.kappa)**2
+
+        J = (4 * (tAA**2) / UA) + (4 * (tAB**2) / (UA * Delta**2)) * (UA + 2 * Delta) * (-tAA) + (4 * (tAB**4) / (UA * Delta**2)) * (2 * UA + UB + 2 * Delta) / (UB + 2 * Delta)  - 2 * exchangeA
+        J /= ref_energy
+
+        return J
 
     
     # ------------------------------------------------------------------

@@ -92,12 +92,43 @@ def plot_k_mesh(self, ax, Nx, Ny):
     ax.scatter(k_points_bz[:, 0], k_points_bz[:, 1], color='#FF216B', s=30, alpha=0.9, edgecolors='k', linewidth=1.0)
     self.plot_hexagonal_bz(ax)
 
-def plot_wavefunction(ax, wavefunction, extent, label="", cmap='RdBu_r', norm=None):
-    im = ax.imshow(np.abs(wavefunction)**2, extent=extent, origin='lower', 
-                interpolation='none', cmap=cmap, norm=norm)
-    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label(label, fontsize=18)
-    return im
+def plot_wavefunction(ax, wavefunction, extent, label="", cmap='RdBu_r', norm=None, levels=12,
+                      boundary=None):
+    # im = ax.imshow(np.abs(wavefunction)**2, extent=extent, origin='lower', 
+    #             interpolation='none', cmap=cmap, norm=norm)
+    # cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    # cbar.set_label(label, fontsize=18)
+    # return im
+    density = np.abs(wavefunction)**2
+    
+    ny, nx = density.shape
+    x = np.linspace(extent[0], extent[1], nx)
+    y = np.linspace(extent[2], extent[3], ny)
+    X, Y = np.meshgrid(x, y)
+
+    # Filled contours
+    cf = ax.contourf(X, Y, density, levels=levels, cmap=cmap, norm=norm)
+
+    # Thin black line on every level for the crisp outlined look
+    ax.contour(X, Y, density, levels=cf.levels, colors='k',
+            linewidths=0.5)
+
+    # Optional dashed boundary overlay (e.g. Brillouin zone / unit cell)
+    if boundary is not None:
+        bx, by = boundary  # arrays of vertex coords, closed polygon
+        ax.plot(bx, by, '--', color='red', linewidth=1.5)
+
+    # Boxed corner label
+    if label is not None:
+        ax.text(0.05, 0.95, label, transform=ax.transAxes,
+                va='top', ha='left', fontsize=14,
+                bbox=dict(boxstyle='square', facecolor='white',
+                        edgecolor='black', linewidth=1.5))
+
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.set_aspect('equal')
+    return cf
 
 def plot_wavefunction_phase(ax, wavefunction, extent, cmap='RdBu_r'):
     im = ax.imshow(np.abs(np.angle(wavefunction)), extent=extent, origin='lower', 
@@ -109,7 +140,7 @@ def plot_wannier_function(sys, axs, X, Y, k_points, trial_centers=np.array([np.z
     extent = [X.min(), X.max(), Y.min(), Y.max()]
 
     if np.isscalar(axs) or isinstance(axs, plt.Axes):
-        plot_wavefunction(axs, wanniers[0], extent, label=r"$|w_0(\mathbf{r})|^2$", norm=norm, cmap=cmap)
+        plot_wavefunction(axs, wanniers, extent, label=r"$|w_0(\mathbf{r})|^2$", norm=norm, cmap=cmap)
         plot_triangular_lattice(sys, axs, extent)
         axs.set_xlabel(r'$x/a_M$', fontsize=22)
         axs.set_ylabel(r'$y/a_M$', fontsize=22)

@@ -14,6 +14,8 @@ DX = 1e-3                   # infinitesimal x-step for derivatives in units of A
 DY = DX                     # infinitesimal y-step for derivatives in units of Angstrom
 B1_TRIANGULAR = np.array([4 * np.pi / np.sqrt(3), 0.0])
 B2_TRIANGULAR = np.array([-2 * np.pi / np.sqrt(3), 2 * np.pi])
+ADIMB1 = np.array([4 * np.pi / np.sqrt(3), 0.0])
+ADIMB2 = np.array([-2 * np.pi / np.sqrt(3), 2 * np.pi])
 
 
 # ------------------------------------------------------------------
