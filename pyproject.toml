@@ -1,0 +1,33 @@
+[project]
+name = "moire"
+version = "0.1.0"
+description = "Moire quantum geometry project"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "icecream>=2.1.10",
+  "llvmlite>=0.42.0",
+  "numba>=0.59,<0.60",
+  "numpy>=1.26,<2.0",
+  "numpy>=0.64",
+  "scipy>=1.17",
+  "tqdm>=4.67.1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest >= 8.0",
+  "pytest-benchmark>=5.2.3",
+  "matplotlib>=3.9.0",
+  "ipykernel>=7.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+  "tests",
+]
+
+pythonpath = [
+  "src",
+]
+
