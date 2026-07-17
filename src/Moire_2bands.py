@@ -623,7 +623,7 @@ class Moire:
                          trial_centers,               # [[Rax,Ray],[Rbx,Rby]] -> R_A, R_B
                          band_indices=(-2, -1)):
         """
-        Two-band projective Wannier functions (notes sec. 2, hole convention).
+        Two-band projective Wannier functions
         Returns array (n_w, *x.shape), one Wannier function per trial center.
         """
         x, y = np.asarray(x), np.asarray(y)
@@ -673,8 +673,7 @@ class Moire:
         return wannier.reshape((n_w,) + orig_shape)           # (n_w, *orig_shape)
 
     
-    def integrate_wannier(self, fun, X, Y, k_points):
-        wannier = self.wannier_wavefunction(X, Y, k_points)
+    def integrate_wannier(self, fun, wannier, X, Y, k_points):
         density = np.abs(wannier)**2
 
         integral = np.trapz(
@@ -718,10 +717,9 @@ class Moire:
                     U_all[3*N:4*N], U_all[4*N:5*N])
 
         def make_dual(U_shift):
-            # (45): S_{nm} = <u_nk | u_{m,k+q}>              (N, nb, nb)
             S = np.einsum('kan,kam->knm', np.conj(U), U_shift)
             Sinv = np.linalg.inv(S)
-            # (44): |dual_n> = sum_m (S^-1)_{mn} |u_{m,k+q}>  (N, Nh, nb)
+            
             return np.einsum('kam,kmn->kan', U_shift, Sinv)
 
         dual_xp, dual_xm, dual_yp, dual_ym = map(make_dual, U_shifted)
@@ -750,7 +748,9 @@ class Moire:
         k_points_bz = self.map_to_first_BZ(k_points)
 
         g_xx, _, g_yy = self.quantum_metric(k_points_bz)
-        trace = g_xx + g_yy
+        GX = g_xx[:, 0] + g_xx[:, 1]
+        GY = g_yy[:, 0] + g_yy[:, 1]
+        trace = GX + GY
 
         # Find which indices in k_points match points in k_points_bz
         # k_points: (N, 2), k_points_bz: (M, 2), M < N
@@ -778,18 +778,15 @@ class Moire:
         """
         B = np.column_stack([self.b1, self.b2])           # (2,2) matrix, columns are b1, b2
 
-        # Step 1: initial reduction into the parallelogram unit cell [-0.5, 0.5)
         B_inv = np.linalg.inv(B)
         frac = k_points @ B_inv.T              # fractional coordinates, (N, 2)
         frac_reduced = frac - np.floor(frac + 0.5)
         k_reduced = frac_reduced @ B.T         # back to Cartesian, (N, 2)
 
-        # Step 2: build all G-vectors in the requested shells — vectorized
         n_range = np.arange(-shells, shells + 1)
         ns = np.array(np.meshgrid(n_range, n_range)).T.reshape(-1, 2)  # ((2s+1)^2, 2)
         G_vectors = ns @ B.T                   # ((2s+1)^2, 2) in Cartesian
 
-        # Step 3: for every k find the G that minimises |k - G|  (fully vectorized)
         # k_reduced: (N, 2), G_vectors: (M, 2)
         diff = k_reduced[:, None, :] - G_vectors[None, :, :]  # (N, M, 2)
         norms = np.linalg.norm(diff, axis=-1)                 # (N, M)

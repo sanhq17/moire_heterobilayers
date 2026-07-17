@@ -596,7 +596,6 @@ class Moire:
         g_phase = np.exp(1j * (g_vecs[:, 0, None] * xf[None, :]
                             + g_vecs[:, 1, None] * yf[None, :]))
 
-        # u_k(r) = sum_m zk[k,m] exp(i g_m . r)  -> matmul, (n_k, N) @ (N, Npts)
         u_k = zk @ g_phase                       # (n_k, Npts)
 
         # exp(i k . r)  -> (n_k, Npts)
@@ -623,7 +622,7 @@ class Moire:
                          trial_centers,               # [[Rax,Ray],[Rbx,Rby]] -> R_A, R_B
                          band_indices=(-2, -1)):
         """
-        Two-band projective Wannier functions (notes sec. 2, hole convention).
+        Two-band projective Wannier functions
         Returns array (n_w, *x.shape), one Wannier function per trial center.
         """
         x, y = np.asarray(x), np.asarray(y)
@@ -635,7 +634,6 @@ class Moire:
         n_k = k_points.shape[0]
         bands = list(band_indices)
 
-        # --- Bloch coefficients z^alpha_{k,G} for the chosen bands -------------
         H_all = self.H_k_all(k_points)                        # (n_k, N, N)
         _, eigenvectors = np.linalg.eigh(H_all)
         zk = eigenvectors[:, :, bands]                        # (n_k, N, n_w)  [k, G, alpha]
@@ -657,10 +655,8 @@ class Moire:
             C[kk] = O[kk] @ S_inv_sqrt                        # (alpha, i)
         self._last_smin = smin.min()                          # conditioning monitor
 
-        # --- gauge-fixed plane-wave coeffs: ztilde^i_{kG} = sum_a C_{a i} (z^a_{kG})*
         ztilde = np.einsum('kai,kGa->kGi', C, np.conj(zk))    # (n_k, N, n_w)
 
-        # --- step 5/6: Wannier functions W_i(r) = (1/sqrt(N)) sum_k sum_G ztilde e^{i(k+G).r}
         g_phase = np.exp(1j * (g_vecs[:, 0, None] * xf[None, :]
                             + g_vecs[:, 1, None] * yf[None, :]))   # (N, Npts)
         k_phase = np.exp(1j * (k_points[:, 0, None] * xf[None, :]
@@ -788,19 +784,15 @@ class Moire:
         """
         B = np.column_stack([self.b1, self.b2])           # (2,2) matrix, columns are b1, b2
 
-        # Step 1: initial reduction into the parallelogram unit cell [-0.5, 0.5)
         B_inv = np.linalg.inv(B)
         frac = k_points @ B_inv.T              # fractional coordinates, (N, 2)
         frac_reduced = frac - np.floor(frac + 0.5)
         k_reduced = frac_reduced @ B.T         # back to Cartesian, (N, 2)
 
-        # Step 2: build all G-vectors in the requested shells — vectorized
         n_range = np.arange(-shells, shells + 1)
         ns = np.array(np.meshgrid(n_range, n_range)).T.reshape(-1, 2)  # ((2s+1)^2, 2)
         G_vectors = ns @ B.T                   # ((2s+1)^2, 2) in Cartesian
 
-        # Step 3: for every k find the G that minimises |k - G|  (fully vectorized)
-        # k_reduced: (N, 2), G_vectors: (M, 2)
         diff = k_reduced[:, None, :] - G_vectors[None, :, :]  # (N, M, 2)
         norms = np.linalg.norm(diff, axis=-1)                 # (N, M)
         best = np.argmin(norms, axis=-1)                      # (N,)
