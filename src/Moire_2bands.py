@@ -251,9 +251,9 @@ class Moire:
         complex  Fourier coefficient; 0.0 if not a nearest neighbor.
         """
         if (dm, dn) in ((1, 0), (0, 1), (-1, -1)):
-            return self.V * np.exp( 1j * self.psi)
+            return self.V * np.exp(- 1j * self.psi)
         if (dm, dn) in ((-1, 0), (0, -1), (1, 1)):
-            return self.V * np.exp(-1j * self.psi)
+            return self.V * np.exp(1j * self.psi)
         return 0.0
     
     def _build_offdiag(self):
@@ -644,7 +644,7 @@ class Moire:
         kG = k_points[:, None, :] + g_vecs[None, :, :]        # (n_k, N, 2)  (k+G)
 
         tphase = np.exp(-1j * np.einsum('kGd,id->kGi', kG, trial_centers))  # (n_k, N, n_w)
-        O = np.einsum('kGa,kGi->kai', zk, tphase)             # (n_k, n_w, n_w)  [k, alpha, i]
+        O = np.einsum('kGa,kGi->kai', np.conj(zk), tphase)             # (n_k, n_w, n_w)  [k, alpha, i]
 
         C = np.empty_like(O)                                  # coeff of psi_alpha in psi_tilde_i
         smin = np.empty(n_k)
@@ -653,12 +653,12 @@ class Moire:
             d, V = np.linalg.eigh(S)                          # S = V diag(d) V^dag
             smin[kk] = np.sqrt(max(d.min(), 0.0))
             d = np.maximum(d, 1e-12)                          # roundoff guard
-            S_inv_sqrt = V @ np.diag(1/np.sqrt(d)) @ V.conj().T
+            S_inv_sqrt = V @ np.diag(1 / np.sqrt(d)) @ V.conj().T
             C[kk] = O[kk] @ S_inv_sqrt                        # (alpha, i)
         self._last_smin = smin.min()                          # conditioning monitor
 
         # --- gauge-fixed plane-wave coeffs: ztilde^i_{kG} = sum_a C_{a i} (z^a_{kG})*
-        ztilde = np.einsum('kai,kGa->kGi', C, np.conj(zk))    # (n_k, N, n_w)
+        ztilde = np.einsum('kai,kGa->kGi', C, zk)    # (n_k, N, n_w)
 
         # --- step 5/6: Wannier functions W_i(r) = (1/sqrt(N)) sum_k sum_G ztilde e^{i(k+G).r}
         g_phase = np.exp(1j * (g_vecs[:, 0, None] * xf[None, :]
@@ -668,7 +668,7 @@ class Moire:
 
         u = np.einsum('kGi,GP->kiP', ztilde, g_phase)         # (n_k, n_w, Npts)
         bloch = u * k_phase[:, None, :]                       # (n_k, n_w, Npts)
-        wannier = bloch.sum(axis=0) / (np.sqrt(n_k) * np.sqrt(self.A_unit_cell))
+        wannier = bloch.sum(axis=0) / (n_k * np.sqrt(self.A_unit_cell))
 
         return wannier.reshape((n_w,) + orig_shape)           # (n_w, *orig_shape)
 
