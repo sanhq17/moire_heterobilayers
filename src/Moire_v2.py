@@ -933,19 +933,19 @@ class Moire:
     # Plotting functions
     # ------------------------------------------------------------------
     
-    def plot_bands(self, ax, bands, kdist, ticks, max_bands=4):
-        ax.plot(kdist, bands[:, 0], color='r', lw=1)
-        ax.plot(kdist, bands[:, 1:max_bands], color='k', lw=1)
+    def plot_bands(self, ax, bands, kdist, ticks, max_bands=4, highlight=1):
+        ax.plot(kdist, bands[:, 0:highlight], color='#0024e6', lw=1.5)
+        ax.plot(kdist, bands[:, highlight:max_bands], color='k', lw=1.5)
 
         tick_positions = [t[0] for t in ticks]
         tick_labels    = [t[1] for t in ticks]
         ax.set_xticks(tick_positions)
-        ax.set_xticklabels(tick_labels, fontsize=12)
+        ax.set_xticklabels(tick_labels, fontsize=18)
         for x in tick_positions:
             ax.axvline(x, color='k', lw=0.5, zorder=0)
 
         ax.set_xlim(kdist[0], kdist[-1])
-        ax.set_ylabel("energy (meV)")
+        ax.set_ylabel(r"$E$ [meV]", fontsize=18)
 
         return ax
 

@@ -1040,7 +1040,7 @@ class Moire:
         self.plot_hexagonal_bz(ax)
 
     def plot_wavefunction(self, ax, wavefunction, extent, cmap='RdBu_r', norm=None):
-        im = ax.imshow(np.abs(wavefunction)**2, extent=extent, origin='lower', 
+        im = ax.imshow(self.aM**2 * np.abs(wavefunction)**2, extent=extent, origin='lower', 
                     interpolation='none', cmap=cmap, norm=norm)
         return im
     
