@@ -617,6 +617,48 @@ class Moire:
         wannier = wannier.reshape(orig_shape)
 
         return wannier / (k_points.shape[0] * np.sqrt(self.A_unit_cell))
+    
+    
+    def wannier_wavefunction_target_band(self, x, y, k_points, target_band, gauge_fixed=True, R0=np.zeros(2)):
+        orig_shape = x.shape
+        xf, yf = x.ravel(), y.ravel()          # (Npts,)
+
+        H_all = self.H_k_all(k_points)          # (n_k, N, N)
+        _, eigenvectors = np.linalg.eigh(H_all)
+        zk = eigenvectors[:, :, -target_band]             # (n_k, N)
+
+        g_vecs = np.array([g for g, _ in self.basis]) / self.aM   # (N, 2)
+
+        # exp(i g . r): independent of k, computed once -> (N, Npts)
+        g_phase = np.exp(1j * (g_vecs[:, 0, None] * xf[None, :]
+                            + g_vecs[:, 1, None] * yf[None, :]))
+
+        # u_k(r) = sum_m zk[k,m] exp(i g_m . r)  -> matmul, (n_k, N) @ (N, Npts)
+        u_k = zk @ g_phase                       # (n_k, Npts)
+
+        # exp(i k . r)  -> (n_k, Npts)
+        k_phase = np.exp(1j * (k_points[:, 0, None] * xf[None, :]
+                            + k_points[:, 1, None] * yf[None, :]))
+
+        bloch = u_k * k_phase                    # (n_k, Npts)
+
+        shift = 1 #np.exp(-1j * (k_points @ R0))    # (n_k,)
+
+        if gauge_fixed:
+            # (k + g) . R0   ->   broadcast (n_k,1) + (1,N) = (n_k, N)
+            kR0 = k_points @ R0              # (n_k,)   from (n_k,2)@(2,)
+            gR0 = g_vecs   @ R0              # (N,)     from (N,2)@(2,)
+            R0_phase = np.exp(-1j * (kR0[:, None] + gR0[None, :]))   # (n_k, N)
+
+            gauge = np.exp(1j * np.angle(np.sum(np.conj(zk) * R0_phase, axis=1)))  # (n_k,)
+            coeff = shift * gauge
+        else:
+            coeff = shift
+
+        wannier = coeff @ bloch                  # (n_k,) @ (n_k, Npts) -> (Npts,)
+        wannier = wannier.reshape(orig_shape)
+
+        return wannier / (k_points.shape[0] * np.sqrt(self.A_unit_cell))
 
 
     def wannier_wavefunction_2band(self, x, y, k_points,
