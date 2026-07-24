@@ -536,6 +536,7 @@ requires-dist = [
     { name = "numba", specifier = ">=0.59,<0.60" },
     { name = "numpy", specifier = ">=0.64" },
     { name = "numpy", specifier = ">=1.26,<2.0" },
+    { name = "scipy", specifier = ">=1.4.0" },
     { name = "scipy", specifier = ">=1.17" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]

@@ -1053,12 +1053,17 @@ class Moire:
         ax.plot(corners[:, 0], corners[:, 1], color='k', lw=lw, zorder=3)
         ax.text((self.kappa[0] + self.kappa_pp[0]) / 2, self.kappa[1], "1BZ", fontsize=12, color='k')
 
-    def plot_metric(self, ax, KX, KY, mask_bz=True):
+    def plot_metric(self, ax, KX, KY, mask_bz=True, normalize=False):
         k_points = np.column_stack([KX.ravel(), KY.ravel()])
         g_xx, g_xy, g_yy = self.quantum_metric(k_points)
         g_xx = g_xx.reshape(KX.shape)
         g_xy = g_xy.reshape(KX.shape)
         g_yy = g_yy.reshape(KX.shape)
+
+        if normalize:
+            g_xx /= utils.spread_harmonic_approx(self.aM, self.V, self.psi) **2
+            g_xy /= utils.spread_harmonic_approx(self.aM, self.V, self.psi) **2
+            g_yy /= utils.spread_harmonic_approx(self.aM, self.V, self.psi) **2
 
         if mask_bz:
             dk = KX[0, 1] - KX[0, 0]
@@ -1104,6 +1109,12 @@ class Moire:
         ax[1, 1].set_ylabel(r"$k_y$")
         self.plot_hexagonal_bz(ax[1, 1], lw=lw)
         plt.colorbar(im11, ax=ax[1, 1])
+
+        if normalize:
+            ax[0, 0].set_title(r"$g_{xx}/a_W^2$")
+            ax[0, 1].set_title(r"$g_{xy}/a_W^2$")
+            ax[1, 0].set_title(r"$g_{yx}/a_W^2$")
+            ax[1, 1].set_title(r"$g_{yy}/a_W^2$")
 
     def plot_trace_metric(self, ax, KX, KY, mask_bz=True):
         k_points = np.column_stack([KX.ravel(), KY.ravel()])
