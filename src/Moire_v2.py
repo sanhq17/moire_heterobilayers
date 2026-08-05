@@ -582,7 +582,7 @@ class Moire:
 
         return wannier / (k_points.shape[0] * np.sqrt(self.A_unit_cell))
     
-    def wannier_wavefunction(self, x, y, k_points, gauge_fixed=True, R0=np.zeros(2)):
+    def wannier_wavefunction(self, x, y, k_points, gauge_fixed=True, R0=np.zeros(2), trial_center=np.zeros(2)):
         orig_shape = x.shape
         xf, yf = x.ravel(), y.ravel()          # (Npts,)
 
@@ -607,8 +607,11 @@ class Moire:
         shift = np.exp(-1j * (k_points @ R0))    # (n_k,)
 
         if gauge_fixed:
-            gauge = np.exp(1j * np.angle(np.sum(np.conj(zk), axis=1)))  # (n_k,)
-            coeff = shift * gauge
+            center_phase = np.exp(-1j * (g_vecs @ trial_center))         # (N,)
+            proj  = np.sum(np.conj(zk) * center_phase[None, :], axis=1)  # conj(u_k(t)), (n_k,)
+            gauge = np.exp(1j * np.angle(proj))                          # exp(-i angle(u_k(t)))
+            trial_shift = np.exp(-1j * (k_points @ trial_center))        # e^{-i k.t}
+            coeff = shift * gauge * trial_shift
         else:
             coeff = shift
 
@@ -812,7 +815,7 @@ class Moire:
         
         return k_points.reshape(-1, k_points.shape[-1]), dkx, dky, jac
     
-    def hopping_integral(self, X, Y, k_points, order=1):
+    def hopping_integral(self, X, Y, k_points, order=1, trial_center=np.zeros(2)):
         if order == 1:
             R0 = self.a2
         elif order == 2:
@@ -820,12 +823,12 @@ class Moire:
         elif order == 3:
             R0 = 2 * self.a2
 
-        wannier0 = self.wannier_wavefunction(X, Y, k_points)
-        wannier_xp = self.wannier_wavefunction(X + utils.DX, Y, k_points)
-        wannier_xm = self.wannier_wavefunction(X - utils.DX, Y, k_points)
-        wannier_yp = self.wannier_wavefunction(X, Y + utils.DX, k_points)
-        wannier_ym = self.wannier_wavefunction(X, Y - utils.DX, k_points)
-        wannier2 = self.wannier_wavefunction(X, Y, k_points, R0=R0)
+        wannier0 = self.wannier_wavefunction(X, Y, k_points, trial_center=trial_center)
+        wannier_xp = self.wannier_wavefunction(X + utils.DX, Y, k_points, trial_center=trial_center)
+        wannier_xm = self.wannier_wavefunction(X - utils.DX, Y, k_points, trial_center=trial_center)
+        wannier_yp = self.wannier_wavefunction(X, Y + utils.DX, k_points, trial_center=trial_center)
+        wannier_ym = self.wannier_wavefunction(X, Y - utils.DX, k_points, trial_center=trial_center)
+        wannier2 = self.wannier_wavefunction(X, Y, k_points, R0=R0, trial_center=trial_center)
         
         laplacian = (wannier_xp + wannier_xm + wannier_yp + wannier_ym - 4 * wannier0) / (utils.DX**2)
 
@@ -835,13 +838,13 @@ class Moire:
             axis=0
         )
 
-        # integralV = np.trapz(
-        #     np.trapz(np.conj(wannier2) * self.moire_potential_XY(X, Y) * wannier0, X[0,:], axis=1),
-        #     Y[:,0],
-        #     axis=0
-        # )
+        integralV = np.trapz(
+            np.trapz(np.conj(wannier2) * self.moire_potential_XY(X, Y) * wannier0, X[0,:], axis=1),
+            Y[:,0],
+            axis=0
+        )
 
-        integral = integralT
+        integral = integralT + integralV
 
         return integral
 
@@ -934,8 +937,8 @@ class Moire:
     # ------------------------------------------------------------------
     
     def plot_bands(self, ax, bands, kdist, ticks, max_bands=4, highlight=1):
-        ax.plot(kdist, bands[:, 0:highlight], color='#0024e6', lw=1.5)
-        ax.plot(kdist, bands[:, highlight:max_bands], color='k', lw=1.5)
+        ax.plot(kdist, bands[:, 0:highlight], color="#7d5e8b", lw=2.5)
+        ax.plot(kdist, bands[:, highlight:max_bands], color='k', lw=2.5)
 
         tick_positions = [t[0] for t in ticks]
         tick_labels    = [t[1] for t in ticks]
@@ -989,7 +992,7 @@ class Moire:
                 if (min(x0, x1) <= x_max and max(x0, x1) >= x_min and
                     min(y0, y1) <= y_max and max(y0, y1) >= y_min):
                     #ax.scatter([x0, x1], [y0, y1], color='r', s=10, alpha=0.9, edgecolors='k', linewidth=1.0)
-                    ax.plot([x0, x1], [y0, y1], color='#33221E', ls='--', lw=0.8, alpha=0.9)
+                    ax.plot([x0, x1], [y0, y1], color="0.1", ls=':', lw=0.5, alpha=0.9)
         
         ax.set_xlim(extent[0], extent[1])
         ax.set_ylim(extent[2], extent[3])
@@ -1010,17 +1013,20 @@ class Moire:
                     interpolation='bilinear', cmap=cmap)
         return im
     
-    def plot_wannier_function(self, ax, X, Y, k_points, R0=np.zeros(2), norm=None, cmap='RdBu_r'):
-        wannier = self.wannier_wavefunction(X, Y, k_points, R0=R0, gauge_fixed=True)
+    def plot_wannier_function(self, ax, X, Y, k_points, R0=np.zeros(2), norm=None, cmap='RdBu_r', trial_center=np.zeros(2)):
+        wannier = self.wannier_wavefunction(X, Y, k_points, R0=R0, gauge_fixed=True, trial_center=trial_center)
         extent = [X.min(), X.max(), Y.min(), Y.max()]
-        return self.plot_wavefunction(ax, wannier, extent, norm=norm, cmap=cmap)
+        return  self.plot_wavefunction(ax, (self.aM) *wannier, extent, norm=norm, cmap=cmap)
     
     def plot_wannier_function2(self, ax, X, Y, k_points, R0=np.zeros(2), norm=None, cmap='RdBu_r'):
         return 0
     
-    def plot_berry_curvature(self, ax, KX, KY, abs_val=False, mask_bz=True):
+    def plot_berry_curvature(self, ax, KX, KY, abs_val=False, mask_bz=True, normalize=False):
         k_points = np.column_stack([KX.ravel(), KY.ravel()])
         berry = self.berry_curvature(k_points).reshape(KX.shape)
+        if normalize:
+            berry /= self.aM**2
+
         if abs_val:
             berry = np.abs(berry)
             cmap = 'Reds'
@@ -1028,7 +1034,11 @@ class Moire:
             cmap = 'RdBu_r'
 
         # rebuild matching extent
-        extent = [KX.min(), KX.max(), KY.min(), KY.max()]
+        if normalize:
+            ktheta = np.linalg.norm(self.b1)
+        else:
+            ktheta = 1.0
+        extent = [KX.min() / ktheta, KX.max() / ktheta, KY.min() / ktheta, KY.max() / ktheta]
 
         if mask_bz:
             dk = KX[0, 1] - KX[0, 0]
@@ -1039,19 +1049,24 @@ class Moire:
 
         berry_masked = np.where(mask, berry, 0.0)
 
-        self.plot_hexagonal_bz(ax)
+        self.plot_hexagonal_bz(ax, normalize=normalize)
         im = ax.imshow(berry_masked, extent=extent, origin='lower', 
                     interpolation='none', cmap=cmap)
-        ax.set_title(r"$\Omega(\mathbf{k})$")
+        ax.set_title(r"$\Omega(\mathbf{k}) / a_M^2$", fontsize=22)
         plt.colorbar(im, ax=ax)
         
         return im
     
-    def plot_hexagonal_bz(self, ax, lw=1.5):
-        verts = self.BZ_path.vertices          
-        corners = np.vstack([verts, verts[0]]) # close the loop for plotting
+    def plot_hexagonal_bz(self, ax, lw=3.0, normalize=False):
+        verts = self.BZ_path.vertices      
+        if normalize:
+            ktheta = np.linalg.norm(self.b1)
+        else:
+            ktheta = 1.0
+
+        corners = np.vstack([verts, verts[0]]) / ktheta # close the loop for plotting
         ax.plot(corners[:, 0], corners[:, 1], color='k', lw=lw, zorder=3)
-        ax.text((self.kappa[0] + self.kappa_pp[0]) / 2, self.kappa[1], "1BZ", fontsize=12, color='k')
+        # ax.text((self.kappa[0] + self.kappa_pp[0]) / (2 * ktheta), self.kappa[1] / ktheta, r"1BZ", fontsize=16, color='k')
 
     def plot_metric(self, ax, KX, KY, mask_bz=True, normalize=False):
         k_points = np.column_stack([KX.ravel(), KY.ravel()])
@@ -1059,6 +1074,11 @@ class Moire:
         g_xx = g_xx.reshape(KX.shape)
         g_xy = g_xy.reshape(KX.shape)
         g_yy = g_yy.reshape(KX.shape)
+
+        if normalize:
+            ktheta = np.linalg.norm(self.b1)
+        else:
+            ktheta = 1.0
 
         if normalize:
             g_xx /= utils.spread_harmonic_approx(self.aM, self.V, self.psi) **2
@@ -1078,45 +1098,45 @@ class Moire:
         g_yy_masked = np.where(mask, g_yy, 0.0)
 
         # rebuild matching extent
-        extent = [KX.min(), KX.max(), KY.min(), KY.max()]
+        extent = [KX.min() / ktheta, KX.max() / ktheta, KY.min() / ktheta, KY.max() / ktheta]
 
-        lw = 0.6
+        lw = 1.5
 
         im00 = ax[0, 0].imshow(g_xx_masked, origin='lower', extent=extent, cmap='RdBu_r', interpolation='none')
-        ax[0, 0].set_title(r"$g_{xx}$")
-        ax[0, 0].set_xlabel(r"$k_x$")
-        ax[0, 0].set_ylabel(r"$k_y$")
-        self.plot_hexagonal_bz(ax[0, 0], lw=lw)
+        ax[0, 0].set_title(r"$g_{xx}$", fontsize=22)
+        ax[0, 0].set_xlabel(r"$k_x / k_\theta$", fontsize=20)
+        ax[0, 0].set_ylabel(r"$k_y / k_\theta$", fontsize=20)
+        self.plot_hexagonal_bz(ax[0, 0], lw=lw, normalize=normalize)
         plt.colorbar(im00, ax=ax[0, 0])
 
         im01 = ax[0, 1].imshow(g_xy_masked, origin='lower', extent=extent, cmap='RdBu_r', interpolation='none')
-        ax[0, 1].set_title(r"$g_{xy}$")
-        ax[0, 1].set_xlabel(r"$k_x$")
-        ax[0, 1].set_ylabel(r"$k_y$")
-        self.plot_hexagonal_bz(ax[0, 1], lw=lw)
+        ax[0, 1].set_title(r"$g_{xy}$", fontsize=22)
+        ax[0, 1].set_xlabel(r"$k_x / k_\theta$", fontsize=20)
+        ax[0, 1].set_ylabel(r"$k_y / k_\theta$", fontsize=20)
+        self.plot_hexagonal_bz(ax[0, 1], lw=lw, normalize=normalize)
         plt.colorbar(im01, ax=ax[0, 1])
 
         im10 = ax[1, 0].imshow(g_yx_masked, origin='lower', extent=extent, cmap='RdBu_r', interpolation='none')
-        ax[1, 0].set_title(r"$g_{yx}$")
-        ax[1, 0].set_xlabel(r"$k_x$")
-        ax[1, 0].set_ylabel(r"$k_y$")
-        self.plot_hexagonal_bz(ax[1, 0], lw=lw)
+        ax[1, 0].set_title(r"$g_{yx}$", fontsize=22)
+        ax[1, 0].set_xlabel(r"$k_x / k_\theta$", fontsize=20)
+        ax[1, 0].set_ylabel(r"$k_y / k_\theta$", fontsize=20)
+        self.plot_hexagonal_bz(ax[1, 0], lw=lw, normalize=normalize)
         plt.colorbar(im10, ax=ax[1, 0])
 
         im11 = ax[1, 1].imshow(g_yy_masked, origin='lower', extent=extent, cmap='RdBu_r', interpolation='none')
-        ax[1, 1].set_title(r"$g_{yy}$")
-        ax[1, 1].set_xlabel(r"$k_x$")
-        ax[1, 1].set_ylabel(r"$k_y$")
-        self.plot_hexagonal_bz(ax[1, 1], lw=lw)
+        ax[1, 1].set_title(r"$g_{yy}$", fontsize=22)
+        ax[1, 1].set_xlabel(r"$k_x / k_\theta$", fontsize=20)
+        ax[1, 1].set_ylabel(r"$k_y / k_\theta$", fontsize=20)
+        self.plot_hexagonal_bz(ax[1, 1], lw=lw, normalize=normalize)
         plt.colorbar(im11, ax=ax[1, 1])
 
         if normalize:
-            ax[0, 0].set_title(r"$g_{xx}/a_W^2$")
-            ax[0, 1].set_title(r"$g_{xy}/a_W^2$")
-            ax[1, 0].set_title(r"$g_{yx}/a_W^2$")
-            ax[1, 1].set_title(r"$g_{yy}/a_W^2$")
+            ax[0, 0].set_title(r"$g_{xx}/a_W^2$", fontsize=22)
+            ax[0, 1].set_title(r"$g_{xy}/a_W^2$", fontsize=22)
+            ax[1, 0].set_title(r"$g_{yx}/a_W^2$", fontsize=22)
+            ax[1, 1].set_title(r"$g_{yy}/a_W^2$", fontsize=22)
 
-    def plot_trace_metric(self, ax, KX, KY, mask_bz=True):
+    def plot_trace_metric(self, ax, KX, KY, mask_bz=True, normalize=False):
         k_points = np.column_stack([KX.ravel(), KY.ravel()])
         g_xx, _, g_yy = self.quantum_metric(k_points)
         g_xx = g_xx.reshape(KX.shape)
@@ -1129,18 +1149,34 @@ class Moire:
         else:
             mask = np.ones_like(g_xx, dtype=bool)
 
-        g_xx_masked = np.where(mask, g_xx, 0.0)
-        g_yy_masked = np.where(mask, g_yy, 0.0)
+        g_xx_masked = np.where(mask, g_xx, np.nan)
+        g_yy_masked = np.where(mask, g_yy, np.nan)
 
-        trace = g_xx_masked + g_yy_masked
+        if normalize:
+            norm = utils.spread_harmonic_approx(self.aM, self.V, self.psi) ** 2
+            g_xx_masked = g_xx_masked / norm
+            g_yy_masked = g_yy_masked / norm
+
+        trace = g_xx_masked + g_yy_masked          # nan + nan = nan, stays masked
         extent = [KX.min(), KX.max(), KY.min(), KY.max()]
 
         lw = 0.6
 
-        im00 = ax.imshow(trace, origin='lower', extent=extent, cmap='Reds')
+        # optional: make the masked-out region transparent instead of white
+        cmap = plt.get_cmap('Reds').copy()
+        cmap.set_bad(alpha=0.0)
+
+        im00 = ax.imshow(
+            trace, origin='lower', extent=extent, cmap=cmap,
+            vmin=np.nanmin(trace), vmax=np.nanmax(trace),
+        )
         ax.set_title(r"$\text{Tr}(g(\mathbf{k}))$")
         ax.set_xlabel(r"$k_x$")
         ax.set_ylabel(r"$k_y$")
+
+        if normalize:
+            ax.set_title(r"$\text{Tr}(g(\mathbf{k}))/a_W^2$")
+
         self.plot_hexagonal_bz(ax, lw=lw)
         plt.colorbar(im00, ax=ax)
 

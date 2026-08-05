@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
-
+import utils
 # ---------- theta + metric (from before) ----------
 def _theta3(z, q, eps=1e-18):
     z = np.asarray(z, float)
@@ -15,10 +15,10 @@ def _theta3(z, q, eps=1e-18):
     t2 = -8.0*(qn*n*n*c).sum(-1)
     return t0, t1, t2
 
-def moire_metric(kx, ky, a, aM):
+def moire_metric(kx, ky, sigma, aM):
     kx = np.asarray(kx, float); ky = np.asarray(ky, float)
     alpha = np.sqrt(3.0)*aM/4.0; beta = aM/4.0
-    qx = np.exp(-3.0*aM**2/(16.0*a**2)); qy = np.exp(-aM**2/(16.0*a**2))
+    qx = np.exp(-3.0*aM**2/(16.0*sigma**2)); qy = np.exp(-aM**2/(16.0*sigma**2))
     X0, x1, x2    = _theta3(alpha*kx,            qx)
     Xt0, xt1, xt2 = _theta3(alpha*kx - np.pi/2,  qx)
     X1, X2, Xt1, Xt2 = alpha*x1, alpha**2*x2, alpha*xt1, alpha**2*xt2
@@ -30,8 +30,8 @@ def moire_metric(kx, ky, a, aM):
     Sxx = X2*Y0 + Xt2*Yt0;  Syy = X0*Y2 + Xt0*Yt2
     Sxy = X1*Y1 + Xt1*Yt1
     Lx, Ly = Sx/S, Sy/S
-    gxx = 0.5*a**2 + 0.25*(Sxx/S - Lx*Lx)
-    gyy = 0.5*a**2 + 0.25*(Syy/S - Ly*Ly)
+    gxx = 0.5*sigma**2 + 0.25*(Sxx/S - Lx*Lx)
+    gyy = 0.5*sigma**2 + 0.25*(Syy/S - Ly*Ly)
     gxy = 0.25*(Sxy/S - Lx*Ly)
     return gxx, gyy, gxy
 
@@ -53,7 +53,7 @@ def bz_hexagon(b1, b2):
     return np.array(corners)
 
 # ---------- plot ----------
-def plot_metric_bz(KX, KY,a, aM, n=500, cmap="RdBu_r"):
+def plot_metric_bz(KX, KY, sigma, aM, V, psi, cmap="RdBu_r"):
     b1, b2 = reciprocal_vectors(aM)
     hexc = bz_hexagon(b1, b2)
     path = Path(np.vstack([hexc, hexc[0]]))
@@ -61,11 +61,10 @@ def plot_metric_bz(KX, KY,a, aM, n=500, cmap="RdBu_r"):
     # R = np.abs(hexc).max()*1.02
     # ax_k = np.linspace(-R, R, n)
     # KX, KY = np.meshgrid(ax_k, ax_k)
-    gxx, gyy, gxy = moire_metric(KX, KY, a, aM)
-    gxx = gxx / a**2
-    gyy = gyy / a**2
-    gxy = gxy / a**2
-    detg = gxx*gyy - gxy**2
+    gxx, gyy, gxy = moire_metric(KX, KY, sigma, aM)
+    gxx = gxx / utils.spread_harmonic_approx(aM, V, psi)**2
+    gyy = gyy / utils.spread_harmonic_approx(aM, V, psi)**2
+    gxy = gxy / utils.spread_harmonic_approx(aM, V, psi)**2
 
     inside = path.contains_points(
         np.column_stack([KX.ravel(), KY.ravel()])).reshape(KX.shape)
@@ -88,6 +87,28 @@ def plot_metric_bz(KX, KY,a, aM, n=500, cmap="RdBu_r"):
         ax.set(title=name, aspect="equal",
                xlabel=r"$k_x$", ylabel=r"$k_y$")
     # return fig
+
+def plot_trace_bz(KX, KY, sigma, aM, V, psi, cmap="Reds"):
+    b1, b2 = reciprocal_vectors(aM)
+    hexc = bz_hexagon(b1, b2)
+    path = Path(np.vstack([hexc, hexc[0]]))
+
+    gxx, gyy, gxy = moire_metric(KX, KY, sigma, aM)
+    gxx = gxx / utils.spread_harmonic_approx(aM, V, psi)**2
+    gyy = gyy / utils.spread_harmonic_approx(aM, V, psi)**2
+    gxy = gxy / utils.spread_harmonic_approx(aM, V, psi)**2
+    trace_g = gxx + gyy
+
+    inside = path.contains_points(
+        np.column_stack([KX.ravel(), KY.ravel()])).reshape(KX.shape)
+
+    fig, ax = plt.subplots(figsize=(6, 5), constrained_layout=True)
+    trace_gm = np.where(inside, trace_g, np.nan)
+    pc = ax.pcolormesh(KX, KY, trace_gm, shading="auto", cmap=cmap)
+    fig.colorbar(pc, ax=ax)
+    ax.plot(*np.vstack([hexc, hexc[0]]).T, "k-", lw=1.2)
+    ax.set(title=r"$\mathrm{Tr}(g) / a_W^2$", aspect="equal",
+           xlabel=r"$k_x$", ylabel=r"$k_y$")
 
 # if __name__ == "__main__":
 #     fig = plot_metric_bz(a=120.0, aM=300)

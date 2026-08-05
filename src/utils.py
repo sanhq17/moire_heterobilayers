@@ -9,7 +9,7 @@ from functools import lru_cache
 HBAR2_M = 7618              # hbar^2 / (m) in units of meV*Angstrom^2
 MSTAR = 0.35                # effective mass in units of electron mass
 CHARGE_SQUARED = 14440      # Coulomb's constant in units of meV*Angstroms
-DK = 1e-6                   # infinitesimal k-step for derivatives in units of Angstrom^-1
+DK = 1e-7                   # infinitesimal k-step for derivatives in units of Angstrom^-1
 DX = 1e-3                   # infinitesimal x-step for derivatives in units of Angstrom
 DY = DX                     # infinitesimal y-step for derivatives in units of Angstrom
 ADIMB1 = np.array([4 * np.pi / np.sqrt(3), 0.0])

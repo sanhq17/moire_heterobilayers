@@ -663,7 +663,7 @@ class Moire:
 
     def wannier_wavefunction_2band(self, x, y, k_points,
                          trial_centers,               # [[Rax,Ray],[Rbx,Rby]] -> R_A, R_B
-                         band_indices=(-2, -1)):
+                         band_indices=(-2, -1), R0=np.zeros(2)):
         """
         Two-band projective Wannier functions
         Returns array (n_w, *x.shape), one Wannier function per trial center.
@@ -708,8 +708,11 @@ class Moire:
         k_phase = np.exp(1j * (k_points[:, 0, None] * xf[None, :]
                             + k_points[:, 1, None] * yf[None, :]))  # (n_k, Npts)
 
+        shift = np.exp(-1j * (k_points @ R0))    # (n_k,)
+
         u = np.einsum('kGi,GP->kiP', ztilde, g_phase)         # (n_k, n_w, Npts)
         bloch = u * k_phase[:, None, :]                       # (n_k, n_w, Npts)
+        bloch *= shift[:, None, None]
         wannier = bloch.sum(axis=0) / (n_k * np.sqrt(self.A_unit_cell))
 
         return wannier.reshape((n_w,) + orig_shape)           # (n_w, *orig_shape)
@@ -849,20 +852,39 @@ class Moire:
         
         return k_points.reshape(-1, k_points.shape[-1]), dkx, dky, jac
     
-    def hopping_integral(self, X, Y, k_points, order=1):
-        if order == 1:
-            R0 = self.a2
-        elif order == 2:
-            R0 = self.a2 + self.a1
-        elif order == 3:
-            R0 = 2 * self.a2
+    def hopping_integral(self, X, Y, k_points, sublattice1, sublattice2, order=1, Rshift=None):
+        if order == 0:
+            R0 = np.zeros(2)
+        elif order == 1:
+            R0 = self.a2 - self.a1
 
-        wannier0 = self.wannier_wavefunction(X, Y, k_points)
-        wannier_xp = self.wannier_wavefunction(X + utils.DX, Y, k_points)
-        wannier_xm = self.wannier_wavefunction(X - utils.DX, Y, k_points)
-        wannier_yp = self.wannier_wavefunction(X, Y + utils.DX, k_points)
-        wannier_ym = self.wannier_wavefunction(X, Y - utils.DX, k_points)
-        wannier2 = self.wannier_wavefunction(X, Y, k_points, R0=R0)
+        if Rshift is not None:
+            R0 = Rshift
+
+        ## Trial functions centers
+        RA = np.zeros(2)
+        v2 = self.a1.copy()
+        v2[1] = - v2[1]
+        RB = (self.a1 + v2) / 3
+        ##
+
+        if sublattice1 == "A":
+            ind1 = 0
+        elif sublattice1 == "B":
+            ind1 = 1
+
+        if sublattice2 == "A":
+            ind2 = 0
+        elif sublattice2 == "B":
+            ind2 = 1
+
+        wannier0 = self.wannier_wavefunction_2band(X, Y, k_points, trial_centers= np.array([RA, RB]))[ind1, :, :]
+        wannier_xp = self.wannier_wavefunction_2band(X + utils.DX, Y, k_points, trial_centers= np.array([RA, RB]))[ind1, :, :]
+        wannier_xm = self.wannier_wavefunction_2band(X - utils.DX, Y, k_points, trial_centers= np.array([RA, RB]))[ind1, :, :]
+        wannier_yp = self.wannier_wavefunction_2band(X, Y + utils.DX, k_points, trial_centers= np.array([RA, RB]))[ind1, :, :]
+        wannier_ym = self.wannier_wavefunction_2band(X, Y - utils.DX, k_points, trial_centers= np.array([RA, RB]))[ind1, :, :]
+
+        wannier2 = self.wannier_wavefunction_2band(X, Y, k_points, trial_centers= np.array([RA, RB]), R0=R0)[ind2, :, :]
         
         laplacian = (wannier_xp + wannier_xm + wannier_yp + wannier_ym - 4 * wannier0) / (utils.DX**2)
 
@@ -872,15 +894,16 @@ class Moire:
             axis=0
         )
 
-        # integralV = np.trapz(
-        #     np.trapz(np.conj(wannier2) * self.moire_potential_XY(X, Y) * wannier0, X[0,:], axis=1),
-        #     Y[:,0],
-        #     axis=0
-        # )
+        integralV = np.trapz(
+            np.trapz(np.conj(wannier2) * self.moire_potential_XY(X, Y) * wannier0, X[0,:], axis=1),
+            Y[:,0],
+            axis=0
+        )
 
-        integral = integralT
+        integral = integralT + integralV
 
         return integral
+        
 
 
     def coulomb_potential(self, r, epsilon, soft=1e-2, D=1e6):
@@ -906,32 +929,30 @@ class Moire:
 
         return V0 * radial
     
-    def on_site_interaction(self, X, Y, k_points, interaction="coulomb"):
-        if interaction == "contact":
-            wannier = self.wannier_wavefunction(X, Y, k_points)
-            wannier_pow_4 = np.abs(wannier)**4
-
-            integral = np.trapz(
-                np.trapz(wannier_pow_4, X[0,:], axis=1),
-                Y[:,0],
-                axis=0
-            )
-
-        elif interaction == "coulomb":
-            wannier = self.wannier_wavefunction(X, Y, k_points)
-
-        else:
-            integral = 0
-        
-        return integral
-    
-    def nearest_neighbour_interaction(self, X, Y, k_points, order=1, interaction="coulomb", epsilon=1.0, D=1e6):
+    def nearest_neighbour_interaction(self, X, Y, k_points, sublattice1, sublattice2, order=1, interaction="coulomb", epsilon=1.0, D=1e6):
         if order == 0:
             R0 = np.zeros(2)
         elif order == 1:
-            R0 = self.a2
+            R0 = self.a2 - self.a1
         elif order == 2:
-            R0 = self.a2 + self.a1
+            R0 = self.a2
+
+        ## Trial functions centers
+        RA = np.zeros(2)
+        v2 = self.a1.copy()
+        v2[1] = - v2[1]
+        RB = (self.a1 + v2) / 3
+        ##
+
+        if sublattice1 == "A":
+            ind1 = 0
+        elif sublattice1 == "B":
+            ind1 = 1
+
+        if sublattice2 == "A":
+            ind2 = 0
+        elif sublattice2 == "B":
+            ind2 = 1
 
         if interaction == "contact":
             wannier1 = self.wannier_wavefunction(X, Y, k_points)
@@ -949,8 +970,8 @@ class Moire:
             dx_grid = np.abs(X[0, 1] - X[0, 0])
             dy_grid = np.abs(Y[1, 0] - Y[0, 0])
 
-            wannier1 = self.wannier_wavefunction(X, Y, k_points)
-            wannier2 = self.wannier_wavefunction(X, Y, k_points, R0=R0)
+            wannier1 = self.wannier_wavefunction_2band(X, Y, k_points, trial_centers= np.array([RA, RB]))[ind1, :, :]
+            wannier2 = self.wannier_wavefunction_2band(X, Y, k_points, trial_centers= np.array([RA, RB]), R0=R0)[ind2, :, :]
 
             density1 = np.abs(wannier1)**2
             density2 = np.abs(wannier2)**2
@@ -1014,9 +1035,9 @@ class Moire:
     # Plotting functions
     # ------------------------------------------------------------------
     
-    def plot_bands(self, ax, bands, kdist, ticks, max_bands=4):
-        ax.plot(kdist, bands[:, 0], color='r', lw=1)
-        ax.plot(kdist, bands[:, 1:max_bands], color='k', lw=1)
+    def plot_bands(self, ax, bands, kdist, ticks, max_bands=4, linestyle='-', lw=1, color='k'):
+        ax.plot(kdist, bands[:, 0], color=color, lw=lw, ls=linestyle)
+        ax.plot(kdist, bands[:, 1:max_bands], color=color, lw=lw, ls=linestyle)
 
         tick_positions = [t[0] for t in ticks]
         tick_labels    = [t[1] for t in ticks]

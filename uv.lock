@@ -517,6 +517,7 @@ dependencies = [
     { name = "llvmlite" },
     { name = "numba" },
     { name = "numpy" },
+    { name = "pybinding" },
     { name = "scipy" },
     { name = "tqdm" },
 ]
@@ -536,6 +537,7 @@ requires-dist = [
     { name = "numba", specifier = ">=0.59,<0.60" },
     { name = "numpy", specifier = ">=0.64" },
     { name = "numpy", specifier = ">=1.26,<2.0" },
+    { name = "pybinding", specifier = ">=0.9" },
     { name = "scipy", specifier = ">=1.4.0" },
     { name = "scipy", specifier = ">=1.17" },
     { name = "tqdm", specifier = ">=4.67.1" },
@@ -774,6 +776,18 @@ sdist = { url = "https://files.pythonhosted.org/packages/37/a8/d832f7293ebb21690
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/a9/023730ba63db1e494a271cb018dcd361bd2c917ba7004c3e49d5daf795a2/py_cpuinfo-9.0.0-py3-none-any.whl", hash = "sha256:859625bc251f64e21f077d099d4162689c762b5d6a4c3c97553d56241c9674d5", size = 22335, upload-time = "2022-10-25T20:38:27.636Z" },
 ]
+
+[[package]]
+name = "pybinding"
+version = "0.9.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pytest" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/29/40/c1e40fa822383ffc997e9be8fbaf819eec50b0d398474c5c34e00ac27f47/pybinding-0.9.5.tar.gz", hash = "sha256:a3b0fd5c7bc6babdd265797698573a2ffe31edc5c4c6c4265262aa6f1005603d", size = 1646654, upload-time = "2020-08-30T12:03:19.376Z" }
 
 [[package]]
 name = "pycparser"
