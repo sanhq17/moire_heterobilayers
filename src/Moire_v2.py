@@ -815,13 +815,16 @@ class Moire:
         
         return k_points.reshape(-1, k_points.shape[-1]), dkx, dky, jac
     
-    def hopping_integral(self, X, Y, k_points, order=1, trial_center=np.zeros(2)):
+    def hopping_integral(self, X, Y, k_points, order=1, trial_center=np.zeros(2), Rshift=np.zeros(2)):
         if order == 1:
             R0 = self.a2
         elif order == 2:
             R0 = self.a2 + self.a1
         elif order == 3:
             R0 = 2 * self.a2
+
+        if Rshift is not None:
+            R0 = Rshift
 
         wannier0 = self.wannier_wavefunction(X, Y, k_points, trial_center=trial_center)
         wannier_xp = self.wannier_wavefunction(X + utils.DX, Y, k_points, trial_center=trial_center)
@@ -936,9 +939,12 @@ class Moire:
     # Plotting functions
     # ------------------------------------------------------------------
     
-    def plot_bands(self, ax, bands, kdist, ticks, max_bands=4, highlight=1):
-        ax.plot(kdist, bands[:, 0:highlight], color="#7d5e8b", lw=2.5)
-        ax.plot(kdist, bands[:, highlight:max_bands], color='k', lw=2.5)
+    def plot_bands(self, ax, bands, kdist, ticks, max_bands=4, highlight=1, linestyle="-", lw=2.5, color="k"):
+        if len(bands.shape) != 1:
+            ax.plot(kdist, bands[:, 0:highlight], color=color, lw=lw, ls=linestyle)
+            ax.plot(kdist, bands[:, highlight:max_bands], color=color, lw=lw, ls=linestyle)
+        else:
+            ax.plot(kdist, bands, color=color, lw=lw, ls=linestyle)
 
         tick_positions = [t[0] for t in ticks]
         tick_labels    = [t[1] for t in ticks]
