@@ -32,11 +32,11 @@ def psi(n, x):
 x = np.linspace(-4, 4, 1000)
 V = 0.5 * x**2                           # potential V(x) = 1/2 x^2
 
-n_states = 4
+n_states = 1
 amp = 0.6                                # amplitude scale for visibility
-colors = ['#10288C', '#0F8C24', '#8C6C0F', '#8C0F2A']
+colors = ['#8C0F2A', '#0F8C24', '#8C6C0F', '#8C0F2A']
 
-fig, ax = plt.subplots(figsize=(5, 5))
+fig, ax = plt.subplots(figsize=(7, 5))
 
 # potential well
 ax.plot(x, V - .5, color='#555555', lw=2.5, label=r'$V(x)=\frac{1}{2}x^2$')
@@ -45,7 +45,11 @@ ax.plot(x, V - .5, color='#555555', lw=2.5, label=r'$V(x)=\frac{1}{2}x^2$')
 for n in range(n_states):
     E = n + 0.5
     ax.axhline(E-.5, color='0.7', ls='--', lw=1)                 # energy level
-    ax.plot(x, E + amp * psi(n, x) - .5, color=colors[n], lw=2)
+    ax.plot(x, E + amp * psi(n, x) - .5, color=colors[n], lw=4)
+
+for n in range(3):
+    E = n + 0.5
+    ax.axhline(E-.5, color='0.7', ls='--', lw=1)                 # energy level
 
 # --- mark the Gaussian width sigma on the ground state (n=0) ---
 sigma = 1.0                              # psi_0 ~ exp(-x^2 / 2 sigma^2)  ->  sigma = 1
@@ -58,15 +62,15 @@ y_sig = E0 + amp * psi(0, sigma)         # curve height at x = ±sigma  (peak * 
 #             color=colors[0], ls=':', lw=1)
 
 # double-headed arrow spanning the full width 2*sigma
-ax.annotate('', xy=(-sigma, y_sig-.5), xytext=(sigma, y_sig-.5),
-            arrowprops=dict(arrowstyle='<->', color=colors[0], lw=1.3))
-ax.text(0, y_sig - 0.3 -.5, r'$2\sigma$',
-        color=colors[0], ha='center', va='bottom', fontsize=18)
+# ax.annotate('', xy=(-sigma, y_sig-.5), xytext=(sigma, y_sig-.5),
+#             arrowprops=dict(arrowstyle='<->', color=colors[0], lw=1.3))
+# ax.text(0, y_sig - 0.3 -.5, r'$2\sigma$',
+#         color=colors[0], ha='center', va='bottom', fontsize=18)
 
 ax.set_xlim(-4, 4)
-ax.set_ylim(-.7, 4)
-ax.set_yticks([0, 1, 2, 3])
-ax.set_xticks([0])
+ax.set_ylim(-.7, 2)
+ax.set_yticks([0, 1, 2])
+ax.set_xticks([])
 ax.set_ylabel(r'$n$', fontsize=26)
 ax.spines['top'].set_visible(False)
 ax.spines['right'].set_visible(False)
@@ -74,5 +78,5 @@ ax.spines['left'].set_visible(False)
 ax.spines['bottom'].set_visible(False)
 
 plt.tight_layout()
-plt.savefig("notebooks/plots/harmonic_oscillator.svg", dpi=300, bbox_inches='tight', transparent=True, pad_inches=0)
+plt.savefig("notebooks/plots/harmonic_oscillator.pdf", dpi=300, bbox_inches='tight', transparent=True, pad_inches=0)
 plt.show()

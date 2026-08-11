@@ -929,13 +929,14 @@ class Moire:
 
         return V0 * radial
     
-    def nearest_neighbour_interaction(self, X, Y, k_points, sublattice1, sublattice2, order=1, interaction="coulomb", epsilon=1.0, D=1e6):
+    def nearest_neighbour_interaction(self, X, Y, k_points, sublattice1, sublattice2, order=1, interaction="coulomb", epsilon=1.0, D=1e6, Rshift=None):
         if order == 0:
             R0 = np.zeros(2)
         elif order == 1:
             R0 = self.a2 - self.a1
-        elif order == 2:
-            R0 = self.a2
+
+        if Rshift is not None:
+            R0 = Rshift
 
         ## Trial functions centers
         RA = np.zeros(2)

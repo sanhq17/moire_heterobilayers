@@ -53,8 +53,13 @@ def bz_hexagon(b1, b2):
     return np.array(corners)
 
 # ---------- plot ----------
-def plot_metric_bz(KX, KY, sigma, aM, V, psi, cmap="RdBu_r"):
-    b1, b2 = reciprocal_vectors(aM)
+def plot_metric_bz(KX, KY, sigma, aM, V, psi, cmap="RdBu_r", normalize=False):
+    if normalize:
+        ktheta = 4*np.pi/(np.sqrt(3)*aM)
+    else:
+        ktheta = 1.0
+
+    b1, b2 = reciprocal_vectors(aM) / ktheta
     hexc = bz_hexagon(b1, b2)
     path = Path(np.vstack([hexc, hexc[0]]))
 
@@ -66,6 +71,8 @@ def plot_metric_bz(KX, KY, sigma, aM, V, psi, cmap="RdBu_r"):
     gyy = gyy / utils.spread_harmonic_approx(aM, V, psi)**2
     gxy = gxy / utils.spread_harmonic_approx(aM, V, psi)**2
 
+    
+
     inside = path.contains_points(
         np.column_stack([KX.ravel(), KY.ravel()])).reshape(KX.shape)
     fields = {r"$g_{xx} / a_W^2$": gxx, r"$g_{xy} / a_W^2$": gxy,
@@ -75,17 +82,19 @@ def plot_metric_bz(KX, KY, sigma, aM, V, psi, cmap="RdBu_r"):
     K = hexc
     M = 0.5*np.array([b1, b2, b1+b2, -b1, -b2, -(b1+b2)])
 
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8), constrained_layout=True)
+    fig, axes = plt.subplots(2, 2, figsize=(18, 16), constrained_layout=True)
     for ax, (name, F) in zip(axes.flat, fields.items()):
         Fm = np.where(inside, F, np.nan)
-        pc = ax.pcolormesh(KX, KY, F, shading="auto", cmap=cmap, rasterized=True)
-        fig.colorbar(pc, ax=ax, shrink=0.85)
-        ax.plot(*np.vstack([hexc, hexc[0]]).T, "k-", lw=1.2)
+        Fm = Fm / ktheta**2
+        pc = ax.pcolormesh(KX / ktheta, KY / ktheta, F, shading="auto", cmap=cmap, rasterized=True)
+        fig.colorbar(pc, ax=ax, shrink=0.85, fraction=0.046, pad=0.04)
+        ax.plot(*np.vstack([hexc, hexc[0]]).T, "k-", lw=2.5)
         # ax.scatter(0, 0, c="w", s=25, zorder=5)
         # ax.scatter(*K.T, c="w", s=18, marker="o", zorder=5)
         # ax.scatter(*M.T, c="w", s=18, marker="s", zorder=5)
-        ax.set(title=name, aspect="equal",
-               xlabel=r"$k_x$", ylabel=r"$k_y$")
+        ax.set_title(name, fontsize=30)
+        ax.set_xlabel(r"$k_x / k_\theta$",fontsize=28)
+        ax.set_ylabel(r"$k_y / k_\theta$",fontsize=28)
     # return fig
 
 def plot_trace_bz(KX, KY, sigma, aM, V, psi, cmap="Reds"):

@@ -874,13 +874,16 @@ class Moire:
 
         return V0 * radial
     
-    def nearest_neighbour_interaction(self, X, Y, k_points, order=1, epsilon=1.0, D=1e6):
-        if order == 0:
-            R0 = np.zeros(2)
-        elif order == 1:
+    def nearest_neighbour_interaction(self, X, Y, k_points, order=1, epsilon=1.0, D=1e6, Rshift=None):
+        if order == 1:
             R0 = self.a2
         elif order == 2:
             R0 = self.a2 + self.a1
+        elif order == 3:
+            R0 = 2 * self.a2
+
+        if Rshift is not None:
+            R0 = Rshift
 
         dx_grid = np.abs(X[0, 1] - X[0, 0])
         dy_grid = np.abs(Y[1, 0] - Y[0, 0])
@@ -1009,10 +1012,41 @@ class Moire:
         ax.scatter(k_points_bz[:, 0], k_points_bz[:, 1], color='#FF216B', s=30, alpha=0.9, edgecolors='k', linewidth=1.0)
         self.plot_hexagonal_bz(ax)
 
-    def plot_wavefunction(self, ax, wavefunction, extent, cmap='RdBu_r', norm=None):
-        im = ax.imshow(np.abs(wavefunction)**2, extent=extent, origin='lower', 
-                    interpolation='bilinear', cmap=cmap, norm=norm)
-        return im
+    def plot_wavefunction(self, ax, wavefunction, extent, cmap='RdBu_r', norm=None, levels=8,
+                      boundary=None, label=None):
+        # im = ax.imshow(np.abs(wavefunction)**2, extent=extent, origin='lower', 
+        #             interpolation='bilinear', cmap=cmap, norm=norm)
+        # return im
+        density = np.abs(wavefunction)**2
+
+        ny, nx = density.shape
+        x = np.linspace(extent[0], extent[1], nx)
+        y = np.linspace(extent[2], extent[3], ny)
+        X, Y = np.meshgrid(x, y)
+
+        # Filled contours
+        cf = ax.contourf(X, Y, density, levels=levels, cmap=cmap, norm=norm)
+
+        # Thin black line on every level for the crisp outlined look
+        ax.contour(X, Y, density, levels=cf.levels, colors='k',
+                linewidths=0.5)
+
+        # Optional dashed boundary overlay (e.g. Brillouin zone / unit cell)
+        if boundary is not None:
+            bx, by = boundary  # arrays of vertex coords, closed polygon
+            ax.plot(bx, by, '--', color='red', linewidth=1.5)
+
+        # Boxed corner label
+        if label is not None:
+            ax.text(0.05, 0.95, label, transform=ax.transAxes,
+                    va='top', ha='left', fontsize=14,
+                    bbox=dict(boxstyle='square', facecolor='white',
+                            edgecolor='black', linewidth=1.5))
+
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.set_aspect('equal')
+        return cf
     
     def plot_wavefunction_phase(self, ax, wavefunction, extent, cmap='RdBu_r'):
         im = ax.imshow(np.abs(np.angle(wavefunction)), extent=extent, origin='lower', 
@@ -1106,47 +1140,52 @@ class Moire:
         # rebuild matching extent
         extent = [KX.min() / ktheta, KX.max() / ktheta, KY.min() / ktheta, KY.max() / ktheta]
 
-        lw = 1.5
+        lw = 2.5
 
         im00 = ax[0, 0].imshow(g_xx_masked, origin='lower', extent=extent, cmap='RdBu_r', interpolation='none')
-        ax[0, 0].set_title(r"$g_{xx}$", fontsize=22)
-        ax[0, 0].set_xlabel(r"$k_x / k_\theta$", fontsize=20)
-        ax[0, 0].set_ylabel(r"$k_y / k_\theta$", fontsize=20)
+        ax[0, 0].set_title(r"$g_{xx}$", fontsize=30)
+        ax[0, 0].set_xlabel(r"$k_x / k_\theta$", fontsize=28)
+        ax[0, 0].set_ylabel(r"$k_y / k_\theta$", fontsize=28)
         self.plot_hexagonal_bz(ax[0, 0], lw=lw, normalize=normalize)
-        plt.colorbar(im00, ax=ax[0, 0])
+        plt.colorbar(im00, ax=ax[0, 0],fraction=0.046, pad=0.04)
 
         im01 = ax[0, 1].imshow(g_xy_masked, origin='lower', extent=extent, cmap='RdBu_r', interpolation='none')
-        ax[0, 1].set_title(r"$g_{xy}$", fontsize=22)
-        ax[0, 1].set_xlabel(r"$k_x / k_\theta$", fontsize=20)
-        ax[0, 1].set_ylabel(r"$k_y / k_\theta$", fontsize=20)
+        ax[0, 1].set_title(r"$g_{xy}$", fontsize=30)
+        ax[0, 1].set_xlabel(r"$k_x / k_\theta$", fontsize=28)
+        ax[0, 1].set_ylabel(r"$k_y / k_\theta$", fontsize=28)
         self.plot_hexagonal_bz(ax[0, 1], lw=lw, normalize=normalize)
-        plt.colorbar(im01, ax=ax[0, 1])
+        plt.colorbar(im01, ax=ax[0, 1],fraction=0.046, pad=0.04)
 
         im10 = ax[1, 0].imshow(g_yx_masked, origin='lower', extent=extent, cmap='RdBu_r', interpolation='none')
-        ax[1, 0].set_title(r"$g_{yx}$", fontsize=22)
-        ax[1, 0].set_xlabel(r"$k_x / k_\theta$", fontsize=20)
-        ax[1, 0].set_ylabel(r"$k_y / k_\theta$", fontsize=20)
+        ax[1, 0].set_title(r"$g_{yx}$", fontsize=30)
+        ax[1, 0].set_xlabel(r"$k_x / k_\theta$", fontsize=28)
+        ax[1, 0].set_ylabel(r"$k_y / k_\theta$", fontsize=28)
         self.plot_hexagonal_bz(ax[1, 0], lw=lw, normalize=normalize)
-        plt.colorbar(im10, ax=ax[1, 0])
+        plt.colorbar(im10, ax=ax[1, 0],fraction=0.046, pad=0.04)
 
         im11 = ax[1, 1].imshow(g_yy_masked, origin='lower', extent=extent, cmap='RdBu_r', interpolation='none')
-        ax[1, 1].set_title(r"$g_{yy}$", fontsize=22)
-        ax[1, 1].set_xlabel(r"$k_x / k_\theta$", fontsize=20)
-        ax[1, 1].set_ylabel(r"$k_y / k_\theta$", fontsize=20)
+        ax[1, 1].set_title(r"$g_{yy}$", fontsize=30)
+        ax[1, 1].set_xlabel(r"$k_x / k_\theta$", fontsize=28)
+        ax[1, 1].set_ylabel(r"$k_y / k_\theta$", fontsize=28)
         self.plot_hexagonal_bz(ax[1, 1], lw=lw, normalize=normalize)
-        plt.colorbar(im11, ax=ax[1, 1])
+        plt.colorbar(im11, ax=ax[1, 1],fraction=0.046, pad=0.04)
 
         if normalize:
-            ax[0, 0].set_title(r"$g_{xx}/a_W^2$", fontsize=22)
-            ax[0, 1].set_title(r"$g_{xy}/a_W^2$", fontsize=22)
-            ax[1, 0].set_title(r"$g_{yx}/a_W^2$", fontsize=22)
-            ax[1, 1].set_title(r"$g_{yy}/a_W^2$", fontsize=22)
+            ax[0, 0].set_title(r"$g_{xx}/a_W^2$", fontsize=30)
+            ax[0, 1].set_title(r"$g_{xy}/a_W^2$", fontsize=30)
+            ax[1, 0].set_title(r"$g_{yx}/a_W^2$", fontsize=30)
+            ax[1, 1].set_title(r"$g_{yy}/a_W^2$", fontsize=30)
 
     def plot_trace_metric(self, ax, KX, KY, mask_bz=True, normalize=False):
         k_points = np.column_stack([KX.ravel(), KY.ravel()])
         g_xx, _, g_yy = self.quantum_metric(k_points)
         g_xx = g_xx.reshape(KX.shape)
         g_yy = g_yy.reshape(KX.shape)
+
+        if normalize:
+            ktheta = np.linalg.norm(self.b1)
+        else:
+            ktheta = 1.0
 
         if mask_bz:
             dk = KX[0, 1] - KX[0, 0]
@@ -1164,9 +1203,9 @@ class Moire:
             g_yy_masked = g_yy_masked / norm
 
         trace = g_xx_masked + g_yy_masked          # nan + nan = nan, stays masked
-        extent = [KX.min(), KX.max(), KY.min(), KY.max()]
+        extent = [KX.min() / ktheta, KX.max() / ktheta, KY.min() / ktheta, KY.max() / ktheta]
 
-        lw = 0.6
+        lw = 3
 
         # optional: make the masked-out region transparent instead of white
         cmap = plt.get_cmap('Reds').copy()
@@ -1176,14 +1215,15 @@ class Moire:
             trace, origin='lower', extent=extent, cmap=cmap,
             vmin=np.nanmin(trace), vmax=np.nanmax(trace),
         )
-        ax.set_title(r"$\text{Tr}(g(\mathbf{k}))$")
-        ax.set_xlabel(r"$k_x$")
-        ax.set_ylabel(r"$k_y$")
+
+        ax.set_title(r"$\text{Tr}\,g(\mathbf{k})$")
+        ax.set_xlabel(r"$k_x / k_\theta$", fontsize=20)
+        ax.set_ylabel(r"$k_y / k_\theta$", fontsize=20)
 
         if normalize:
-            ax.set_title(r"$\text{Tr}(g(\mathbf{k}))/a_W^2$")
+            ax.set_title(r"$\text{Tr}\,g(\mathbf{k})/a_W^2$", fontsize=22)
 
-        self.plot_hexagonal_bz(ax, lw=lw)
+        self.plot_hexagonal_bz(ax, lw=lw, normalize=normalize)
         plt.colorbar(im00, ax=ax)
 
     def plot_det_metric(self, ax, KX, KY, mask_bz=True):
@@ -1207,7 +1247,7 @@ class Moire:
         det = g_xx_masked * g_yy_masked - g_xy_masked * g_xy_masked
         extent = [KX.min(), KX.max(), KY.min(), KY.max()]
 
-        lw = 0.6
+        lw = 1.5
 
         im = ax.imshow(2 * np.sqrt(det), origin='lower', extent=extent, cmap='Reds')
         ax.set_title(r"$2\sqrt{\text{det}(g(\mathbf{k}))}$")
