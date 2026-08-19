@@ -70,13 +70,13 @@ for i in range(len(pts)):
 ls = LightSource(azdeg=315, altdeg=45)
 base_rgb = "darkorange"#np.array([0.86, 0.08, 0.24])
 
-for (Xc, Yc, Zc_) in parts:
-    ax.plot_surface(
-        Xc, Yc, Zc_,
-        color=base_rgb, shade=True, lightsource=ls,
-        rstride=1, cstride=1, linewidth=0,
-        antialiased=True, zorder=5,
-    )
+# for (Xc, Yc, Zc_) in parts:
+#     ax.plot_surface(
+#         Xc, Yc, Zc_,
+#         color=base_rgb, shade=True, lightsource=ls,
+#         rstride=1, cstride=1, linewidth=0,
+#         antialiased=True, zorder=5,
+#     )
 
 # ax.scatter([0], [0], [0], color="crimson", s=60)
 

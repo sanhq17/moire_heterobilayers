@@ -12,13 +12,18 @@ CHARGE_SQUARED = 14440      # Coulomb's constant in units of meV*Angstroms
 DK = 1e-7                   # infinitesimal k-step for derivatives in units of Angstrom^-1
 DX = 1e-3                   # infinitesimal x-step for derivatives in units of Angstrom
 DY = DX                     # infinitesimal y-step for derivatives in units of Angstrom
-ADIMB1 = np.array([4 * np.pi / np.sqrt(3), 0.0])
-ADIMB2 = np.array([-2 * np.pi / np.sqrt(3), 2 * np.pi])
+B1_TRIANGULAR = np.array([4 * np.pi / np.sqrt(3), 0.0])
+B2_TRIANGULAR = np.array([-2 * np.pi / np.sqrt(3), 2 * np.pi])
 
 
 # ------------------------------------------------------------------
 # Functions
 # ------------------------------------------------------------------
+
+def rotate(theta_deg):
+    theta = np.radians(theta_deg)
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[c, -s], [s, c]])
 
 @lru_cache(maxsize=None)
 def compute_basis_adim(n_shells):
@@ -26,7 +31,7 @@ def compute_basis_adim(n_shells):
     candidates = []
     for n1 in range(-N, N + 1):
         for n2 in range(-N, N + 1):
-            vec = n1 * np.array(ADIMB1) + n2 * np.array(ADIMB2)
+            vec = n1 * np.array(B1_TRIANGULAR) + n2 * np.array(B2_TRIANGULAR)
             mag2 = round(float(vec @ vec), 6)  # consistent precision
             candidates.append((mag2, vec, (n1, n2)))
 

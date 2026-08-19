@@ -1048,7 +1048,7 @@ class Moire:
             ax.axvline(x, color='k', lw=0.5, zorder=0)
 
         ax.set_xlim(kdist[0], kdist[-1])
-        ax.set_ylabel("energy (meV)")
+        ax.set_ylabel(r"$E$ [meV]", fontsize=18)
 
         return ax
 
