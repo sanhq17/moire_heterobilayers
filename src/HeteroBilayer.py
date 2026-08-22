@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.path import Path as mplPath
 import utils
 
@@ -28,7 +27,8 @@ class HeteroBilayer:
     DEFAULT_THETA_DEG = 2.0
     DEFAULT_V = 6.6            
     DEFAULT_PSI_DEG = 26.0
-    DEFAULT_N_SHELLS = 6
+    DEFAULT_SHELLS = 6
+    DEFAULT_EPSILON = 10.0
 
     # ------------------------------------------------------------------
     # Triangular lattice parameters
@@ -48,12 +48,14 @@ class HeteroBilayer:
     MSTAR = 0.35                # effective mass in units of electron mass
     E_SQUARED = 14440           # Coulomb's constant in units of meV * Angstroms
 
-    def __init__(self, a0=DEFAULT_A0, theta_deg=DEFAULT_THETA_DEG, V=DEFAULT_V, psi_deg=DEFAULT_PSI_DEG, n_shells=DEFAULT_N_SHELLS):
+    def __init__(self, a0=DEFAULT_A0, theta_deg=DEFAULT_THETA_DEG, V=DEFAULT_V, psi_deg=DEFAULT_PSI_DEG,
+                 n_shells=DEFAULT_SHELLS, epsilon=DEFAULT_EPSILON):
         self.a0 = a0
         self.theta_deg = theta_deg
         self.V = V
         self.psi_deg = psi_deg
         self.n_shells = n_shells
+        self.epsilon = epsilon
 
     # ------------------------------------------------------------------
     # Angles
@@ -160,7 +162,7 @@ class HeteroBilayer:
         For a hexagonal lattice:
             g5 = R120 @ g2
         """
-        return utils.rotate(120) @ self.g2
+        return utils.rotate(120) @ self.g3
 
     # ------------------------------------------------------------------
     # High-symmetry points in the Brillouin zone (BZ)
@@ -204,6 +206,16 @@ class HeteroBilayer:
         """
         kappa = utils.rotate(180) @ self.kappa_p
         return kappa
+
+    @property
+    def ktheta(self) -> np.ndarray:
+        """
+        Ktheta momentumm scale in 1/aM units.
+
+            κθ = ||g_1||
+        """
+        ktheta = np.linalg.norm(self.g1)
+        return ktheta
 
     @property
     def A_BZ(self) -> float:
@@ -558,7 +570,7 @@ class HeteroBilayer:
     # Wannier functions by projection
     # ------------------------------------------------------------------
 
-    def wannier_function(self, X, Y, k_points, trial_centers, band_indices=(-1), R0=None):
+    def wannier_function(self, X, Y, k_points, trial_centers, bands=(-1,), R0=None):
         """
         Two-band projective Wannier functions
         Returns array (n_w, *x.shape), one Wannier function per trial center.
@@ -566,20 +578,20 @@ class HeteroBilayer:
         if R0 is None:
             R0 = np.zeros(2)
 
-        orig_shape = X.shape
-        xf, yf = X.ravel(), Y.ravel()                         # (Npts,)
+        x, y = np.asarray(X), np.asarray(Y)
+        orig_shape = x.shape
+        xf, yf = x.ravel(), y.ravel()                         # (Npts,)
 
         trial_centers = np.asarray(trial_centers)             # (n_w, 2)
         n_w = trial_centers.shape[0]
         n_k = k_points.shape[0]
-        bands = list(band_indices)
 
         # --- Bloch coefficients z^alpha_{k,G} for the chosen bands -------------
         H_all = self.H_k_all(k_points)                        # (n_k, N, N)
         _, eigenvectors = np.linalg.eigh(H_all)
-        zk = eigenvectors[:, :, bands]                        # (n_k, N, n_w)  [k, G, alpha]
+        zk = eigenvectors[:, :, list(bands)]                  # (n_k, N, n_w)  [k, G, alpha]
 
-        g_vecs = np.array([g for g, _ in self.basis]) / self.aM   # (N, 2)
+        g_vecs = np.array([g for g, _ in self.basis])         # (N, 2)
         kG = k_points[:, None, :] + g_vecs[None, :, :]        # (n_k, N, 2)  (k+G)
 
         tphase = np.exp(-1j * np.einsum('kGd,id->kGi', kG, trial_centers))  # (n_k, N, n_w)
@@ -641,7 +653,7 @@ class HeteroBilayer:
     # Covariant derivatives and quantum geometric quantities
     # ------------------------------------------------------------------
 
-    def dual_states(self, k_points, bands=(-1)):
+    def dual_states(self, k_points, bands=(-1,)):
         """
         Calculates dual states
 
@@ -659,11 +671,11 @@ class HeteroBilayer:
         k_all = np.vstack([k_points, k_shifted.reshape(-1, 2)])
 
         H_all = self.H_k_all(k_all)
-        _, eigvecs = np.linalg.eigh(H_all)          # ascending
-        U_all = eigvecs[:, :, list(bands)]          # (5*N, Nh, nb)
+        _, eigvecs = np.linalg.eigh(H_all)              # ascending
+        U_all = eigvecs[:, :, list(bands)]              # (5*N, Nh, nb)
 
         N = len(k_points)
-        U = U_all[0*N:1*N]                           # base states u_{nk}  (N, Nh, nb)
+        U = U_all[0*N:1*N]                              # base states u_{nk}  (N, Nh, nb)
         U_shifted = (U_all[1*N:2*N], U_all[2*N:3*N],
                     U_all[3*N:4*N], U_all[4*N:5*N])
 
@@ -676,7 +688,7 @@ class HeteroBilayer:
         dual_xp, dual_xm, dual_yp, dual_ym = map(make_dual, U_shifted)
         return dual_xp, dual_xm, dual_yp, dual_ym
 
-    def covariant_derivatives(self, k_points, bands=(-1, -2)):
+    def covariant_derivatives(self, k_points, bands=(-1,)):
         """
         Calculates covariant derivatives
 
@@ -689,11 +701,11 @@ class HeteroBilayer:
         float  TODO
         """
         dual_xp, dual_xm, dual_yp, dual_ym = self.dual_states(k_points, bands)
-        dX = (dual_xp - dual_xm) / (2 * utils.DK)
-        dY = (dual_yp - dual_ym) / (2 * utils.DK)
+        dX = (dual_xp - dual_xm) / (2 * self.DK)
+        dY = (dual_yp - dual_ym) / (2 * self.DK)
         return dX, dY
 
-    def berry_curvature(self, k_points, bands=(-1, -2)):
+    def berry_curvature(self, k_points, bands=(-1,)):
         """
         Calculates Berry curvature
 
@@ -709,7 +721,7 @@ class HeteroBilayer:
         overlap = np.sum(np.conj(dX) * dY, axis=-2)         # (N_kpoints, n_bands)
         return -2 * np.imag(overlap)
 
-    def quantum_metric(self, k_points, bands=(-1, -2)):
+    def quantum_metric(self, k_points, bands=(-1,)):
         """
         Calculates quantum metric
 
@@ -727,7 +739,7 @@ class HeteroBilayer:
         g_xy = np.real(np.sum(np.conj(dX) * dY, axis=-2))
         return g_xx, g_xy, g_yy
     
-    def integrate_trace(self, Nx, Ny):
+    def integrate_trace(self, Nx, Ny, bands=(-1,)):
         """
         Integrates trace of metric
 
@@ -742,13 +754,21 @@ class HeteroBilayer:
         k_points, dkx, dky, jac = self.mesh_k_hex(Nx=Nx, Ny=Ny)
         k_points_bz = self.map_to_first_BZ(k_points)
 
-        g_xx, _, g_yy = self.quantum_metric(k_points_bz)
-        GX = g_xx[:, 0] + g_xx[:, 1]
-        GY = g_yy[:, 0] + g_yy[:, 1]
-        trace = GX + GY
-        
-        dA = dkx * dky * jac
-        integral = (1 / self.A_BZ) * np.sum(trace) * dA
+        g_xx, _, g_yy = self.quantum_metric(k_points_bz, bands)
+
+        if len(list(bands)) == 1:
+            g_xx, _, g_yy = self.quantum_metric(k_points_bz)
+            trace = g_xx + g_yy
+
+            dA = dkx * dky * jac
+            integral = (1 / self.A_BZ) * np.sum(trace) * dA
+        elif len(list(bands)) == 2:
+            GX = g_xx[:, 0] + g_xx[:, 1]
+            GY = g_yy[:, 0] + g_yy[:, 1]
+            trace = GX + GY
+            
+            dA = dkx * dky * jac
+            integral = (1 / self.A_BZ) * np.sum(trace) * dA
 
         return integral
 
@@ -785,7 +805,7 @@ class HeteroBilayer:
 
     def mesh_k_hex(self, Nx=10, Ny=10):
         """
-        Integrates trace of metric
+        mesh of...
 
         Parameters
         ----------
@@ -821,9 +841,7 @@ class HeteroBilayer:
 
         ## Trial functions centers
         RA = np.zeros(2)
-        v2 = self.a1.copy()
-        v2[1] = - v2[1]
-        RB = (self.a1 + v2) / 3
+        RB = (2 * self.a1 - self.a2) / 3
         ##
 
         if sublattice1 == "A":
@@ -864,7 +882,7 @@ class HeteroBilayer:
         
 
 
-    def coulomb_potential(self, r, epsilon, soft=1e-2, D=1e6):
+    def coulomb_potential(self, r, soft=1e-2, D=1e6):
         """
         Coulomb potential between two points in 2D.
 
@@ -878,7 +896,8 @@ class HeteroBilayer:
         -------
         float  Coulomb potential [meV].
         """
-        V0 = self.E_SQUARED / epsilon
+        # Dimensionless units converted through aM
+        V0 = self.E_SQUARED / (self.EPSILON * self.aM)
         
         if D > 1e5:
             radial = 1 / np.sqrt(r**2 + soft**2)
@@ -898,9 +917,7 @@ class HeteroBilayer:
 
         ## Trial functions centers
         RA = np.zeros(2)
-        v2 = self.a1.copy()
-        v2[1] = - v2[1]
-        RB = (self.a1 + v2) / 3
+        RB = (2 * self.a1 - self.a2) / 3
         ##
 
         if sublattice1 == "A":
