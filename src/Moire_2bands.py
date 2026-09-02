@@ -699,6 +699,7 @@ class Moire:
             S_inv_sqrt = V @ np.diag(1 / np.sqrt(d)) @ V.conj().T
             C[kk] = O[kk] @ S_inv_sqrt                        # (alpha, i)
         self._last_smin = smin.min()                          # conditioning monitor
+        print(S_inv_sqrt)
 
         # --- gauge-fixed plane-wave coeffs: ztilde^i_{kG} = sum_a C_{a i} (z^a_{kG})
         ztilde = np.einsum('kai,kGa->kGi', C, zk)    # (n_k, N, n_w)

@@ -1,6 +1,52 @@
 import numpy as np
+from numba import njit, prange
 from matplotlib.path import Path as mplPath
+
 import utils
+
+
+@njit(cache=True, parallel=True)
+def _coulomb_integral_real(rho_left, rho_right, x, y, v0, soft, D, dxdy2):
+    """Evaluate a real Coulomb bilinear form without materializing its kernel."""
+    n = rho_left.size
+    row_sums = np.empty(n, dtype=np.float64)
+    finite_D = D <= 1e5
+
+    for i in prange(n):
+        total = 0.0
+        for j in range(n):
+            dx = x[i] - x[j]
+            dy = y[i] - y[j]
+            r_soft = np.sqrt(dx * dx + dy * dy + soft * soft)
+            kernel = 1.0 / r_soft
+            if finite_D:
+                kernel -= 1.0 / np.sqrt(dx * dx + dy * dy + D * D)
+            total += v0 * kernel * rho_right[j]
+        row_sums[i] = total
+
+    return dxdy2 * np.dot(rho_left, row_sums)
+
+
+@njit(cache=True, parallel=True)
+def _coulomb_integral_complex(rho_left, rho_right, x, y, v0, soft, D, dxdy2):
+    """Evaluate a complex Coulomb bilinear form without materializing its kernel."""
+    n = rho_left.size
+    row_sums = np.empty(n, dtype=np.complex128)
+    finite_D = D <= 1e5
+
+    for i in prange(n):
+        total = 0.0j
+        for j in range(n):
+            dx = x[i] - x[j]
+            dy = y[i] - y[j]
+            r_soft = np.sqrt(dx * dx + dy * dy + soft * soft)
+            kernel = 1.0 / r_soft
+            if finite_D:
+                kernel -= 1.0 / np.sqrt(dx * dx + dy * dy + D * D)
+            total += v0 * kernel * rho_right[j]
+        row_sums[i] = total
+
+    return dxdy2 * np.dot(rho_left, row_sums)
 
 class HeteroBilayer:
     """
@@ -18,17 +64,24 @@ class HeteroBilayer:
     V        : float  Moiré potential amplitude [meV]. Default 6.6 meV.
     psi_deg  : float  Moiré potential phase [degrees]. Default 26.0°.
     n_shells : int    Number of reciprocal-lattice shells to include
-                      in the plane-wave basis. Default 6.
+                      in the plane-wave basis. Default 8.
+    epsilon  : float  Dielectric constant for Coulomb interaction. Default 10.0.
     """
     # ------------------------------------------------------------------
     # Default parameters for a twisted heterobilayer (e.g., WSe₂/MoSe₂)
     # ------------------------------------------------------------------
-    DEFAULT_A0 = 3.32          
+    DEFAULT_A0 = 3.32    
     DEFAULT_THETA_DEG = 2.0
-    DEFAULT_V = 6.6            
+    DEFAULT_V = 6.6
     DEFAULT_PSI_DEG = 26.0
-    DEFAULT_SHELLS = 6
-    DEFAULT_EPSILON = 10.0
+    DEFAULT_SHELLS = 8
+    DEFAULT_EPSILON = 15.0
+
+
+    DEFAULT_K_MESH = 21
+    DEFAULT_NX = 80
+    DEFAULT_NY = 80
+    DEFAULT_SCALE = 4.0
 
     # ------------------------------------------------------------------
     # Triangular lattice parameters
@@ -555,11 +608,13 @@ class HeteroBilayer:
 
         return 2 * self.V * potential
 
-    def mesh_k_unit_cell(self, Nx=12, Ny=12):
+    def mesh_k_unit_cell(self):
         """
         Sample one parallelogram unit cell of the reciprocal lattice.
         i/Nx and j/Ny run over [0, 1), so no double-counting at boundaries.
         """
+        Nx = self.DEFAULT_K_MESH
+        Ny = self.DEFAULT_K_MESH
         i = np.arange(0, Nx)
         j = np.arange(0, Ny)
         ii, jj = np.meshgrid(i, j, indexing='ij')
@@ -570,7 +625,7 @@ class HeteroBilayer:
     # Wannier functions by projection
     # ------------------------------------------------------------------
 
-    def wannier_function(self, X, Y, k_points, trial_centers, bands=(-1,), R0=None):
+    def wannier_function(self, X, Y, trial_centers, bands=(-1,), R0=None):
         """
         Two-band projective Wannier functions
         Returns array (n_w, *x.shape), one Wannier function per trial center.
@@ -581,10 +636,11 @@ class HeteroBilayer:
         x, y = np.asarray(X), np.asarray(Y)
         orig_shape = x.shape
         xf, yf = x.ravel(), y.ravel()                         # (Npts,)
+        k_points = self.mesh_k_unit_cell()
+        n_k = k_points.shape[0]
 
         trial_centers = np.asarray(trial_centers)             # (n_w, 2)
         n_w = trial_centers.shape[0]
-        n_k = k_points.shape[0]
 
         # --- Bloch coefficients z^alpha_{k,G} for the chosen bands -------------
         H_all = self.H_k_all(k_points)                        # (n_k, N, N)
@@ -866,7 +922,7 @@ class HeteroBilayer:
 
         return V0 * radial
 
-    def hopping_1band(self, X, Y, k_points, orders, trial_center=np.zeros(2)):
+    def hopping_1band(self, orders):
         shifts = []
         for order in orders:
             if order == 0:
@@ -878,17 +934,23 @@ class HeteroBilayer:
             elif order == 3:
                 shifts.append(2 * self.a2)
 
-        wannier0 = self.wannier_function(X, Y, k_points, trial_centers=[trial_center], bands=(1,))
-        wannier_xp = self.wannier_function(X + self.DX, Y, k_points, trial_centers=[trial_center], bands=(1,))
-        wannier_xm = self.wannier_function(X - self.DX, Y, k_points, trial_centers=[trial_center], bands=(1,))
-        wannier_yp = self.wannier_function(X, Y + self.DY, k_points, trial_centers=[trial_center], bands=(1,))
-        wannier_ym = self.wannier_function(X, Y - self.DY, k_points, trial_centers=[trial_center], bands=(1,))
+        delta_center = [np.zeros(2)]
+
+        x = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NX)
+        y = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NY)
+        X, Y = np.meshgrid(x, y)
+
+        wannier0 = self.wannier_function(X, Y, trial_centers=delta_center)
+        wannier_xp = self.wannier_function(X + self.DX, Y, trial_centers=delta_center)
+        wannier_xm = self.wannier_function(X - self.DX, Y, trial_centers=delta_center)
+        wannier_yp = self.wannier_function(X, Y + self.DY, trial_centers=delta_center)
+        wannier_ym = self.wannier_function(X, Y - self.DY, trial_centers=delta_center)
 
         laplacian = (wannier_xp + wannier_xm + wannier_yp + wannier_ym - 4 * wannier0) / (self.aM * self.DX)**2
 
         hopping_integrals = []
         for Rshift in shifts:
-            wannier2 = self.wannier_function(X, Y, k_points, trial_centers=[trial_center], bands=(1,), R0=Rshift)
+            wannier2 = self.wannier_function(X, Y, trial_centers=delta_center, R0=Rshift)
 
             integralT = 0.5 * (self.HBAR2_M / self.MSTAR) * np.trapz(
                 np.trapz(np.conj(wannier2) * laplacian, X[0,:], axis=1),
@@ -905,7 +967,7 @@ class HeteroBilayer:
 
         return hopping_integrals
 
-    def interaction_1band(self, X, Y, k_points, orders, trial_center=np.zeros(2)):
+    def hopping_1band_kspace(self, orders):
         shifts = []
         for order in orders:
             if order == 0:
@@ -917,32 +979,120 @@ class HeteroBilayer:
             elif order == 3:
                 shifts.append(2 * self.a2)
 
+        k_points = self.mesh_k_unit_cell()
+        bands, _ = self.calculate_bands(k_points)   # bands: (n_pts, N), meV
+        Ek = bands[:, 0]                # (n_pts,)
+        N = k_points.shape[0]
+
+        hopping_integrals = []
+        for Rshift in shifts:
+            phase = np.exp(1j * (k_points @ Rshift))   # k·R0 for every k
+            t_R = np.sum(Ek * phase) / N
+            hopping_integrals.append(t_R)
+
+        return hopping_integrals
+
+    def interaction_1band(self, orders):
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2)
+            elif order == 2:
+                shifts.append(self.a2 + self.a1)
+            elif order == 3:
+                shifts.append(2 * self.a2)
+
+        delta_center = [np.zeros(2)]
+        x = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NX)
+        y = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NY)
+        X, Y = np.meshgrid(x, y)
+
         dx_grid = np.abs(X[0, 1] - X[0, 0])
         dy_grid = np.abs(Y[1, 0] - Y[0, 0])
 
-        wannier1 = self.wannier_function(X, Y, k_points, trial_centers=[trial_center], bands=(0,))
+        wannier1 = self.wannier_function(X, Y, trial_centers=delta_center)
         density1 = np.abs(wannier1)**2
         rho1 = density1.ravel()
 
         interactions = []
         for Rshift in shifts:
-            wannier2 = self.wannier_function(X, Y, k_points, trial_centers=[trial_center], bands=(0,), R0=Rshift)
+            wannier2 = self.wannier_function(X, Y, trial_centers=delta_center, R0=Rshift)
 
             density2 = np.abs(wannier2)**2
             rho2 = density2.ravel()
 
-            R = np.column_stack((X.ravel(), Y.ravel()))
-
-            dr = R[:, None, :] - R[None, :, :]
-            dist = np.linalg.norm(dr, axis=-1)
-
             softness = np.min([dx_grid, dy_grid]) / 2
-            K = self.coulomb_potential(dist, soft=softness)      # shape (N, N)
-
-            integral = (dx_grid * dy_grid)**2 * np.dot(rho2, K @ rho1)
+            integral = _coulomb_integral_real(
+                rho2,
+                rho1,
+                X.ravel(),
+                Y.ravel(),
+                self.E_SQUARED / (self.epsilon * self.aM),
+                softness,
+                1e6,
+                (dx_grid * dy_grid)**2,
+            )
             interactions.append(integral)
 
         return interactions
+
+    def exchange_1band(self, orders=[1]):
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2)
+            elif order == 2:
+                shifts.append(self.a2 + self.a1)
+            elif order == 3:
+                shifts.append(2 * self.a2)
+
+        delta_center = [np.zeros(2)]
+        x = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NX)
+        y = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NY)
+        X, Y = np.meshgrid(x, y)
+
+        dx_grid = np.abs(X[0, 1] - X[0, 0])
+        dy_grid = np.abs(Y[1, 0] - Y[0, 0])
+
+        wannier1 = self.wannier_function(X, Y, trial_centers=delta_center)
+
+        interactions = []
+        for Rshift in shifts:
+            wannier2 = self.wannier_function(X, Y, trial_centers=delta_center, R0=Rshift)
+
+            A = np.conj(wannier1) * wannier2
+            a = A.ravel()
+    
+            softness = np.min([dx_grid, dy_grid])/2
+            integral = _coulomb_integral_complex(
+                np.conj(a),
+                a,
+                X.ravel(),
+                Y.ravel(),
+                self.E_SQUARED / (self.epsilon * self.aM),
+                softness,
+                1e6,
+                (dx_grid * dy_grid)**2,
+            )
+            interactions.append(integral)
+
+        return interactions
+
+    def spin_coupling_1band(self):
+        t1 = np.real( self.hopping_1band_kspace([1])[0] )
+        U0 = np.real( self.interaction_1band([0])[0] )
+        X = np.real( self.exchange_1band([1])[0] )
+
+        ref_energy = (self.HBAR2_M / self.aM**2) * np.linalg.norm(self.kappa)**2
+
+        J = 4 * t1**2 / U0 - 2 * X
+        J /= ref_energy
+
+        return J
 
     def hopping_integral(self, X, Y, k_points, sublattice1, sublattice2, order=1, Rshift=None):
         if order == 0:

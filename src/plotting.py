@@ -125,8 +125,6 @@ def plot_wavefunction(ax, wavefunction, extent, label="", cmap='RdBu_r', norm=No
                 bbox=dict(boxstyle='square', facecolor='white',
                         edgecolor='black', linewidth=1.5))
 
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
     ax.set_aspect('equal')
     return cf
 
@@ -135,8 +133,8 @@ def plot_wavefunction_phase(ax, wavefunction, extent, cmap='RdBu_r'):
                 interpolation='none', cmap=cmap)
     return im
 
-def plot_wannier_function(sys, axs, X, Y, k_points, trial_centers=np.array([np.zeros(2)]), bands=(-1,), R0=np.zeros(2), norm=None, cmap='RdBu_r'):
-    wanniers = sys.wannier_function(X, Y, k_points, trial_centers=trial_centers, bands=bands, R0=R0)
+def plot_wannier_function(sys, axs, X, Y, trial_centers=np.array([np.zeros(2)]), bands=(-1,), R0=np.zeros(2), norm=None, cmap='RdBu_r'):
+    wanniers = sys.wannier_function(X, Y, trial_centers=trial_centers, bands=bands, R0=R0)
     extent = [X.min(), X.max(), Y.min(), Y.max()]
 
     if np.isscalar(axs) or isinstance(axs, plt.Axes):
