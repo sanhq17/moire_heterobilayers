@@ -6,11 +6,10 @@ import utils
 
 
 @njit(cache=True, parallel=True)
-def _coulomb_integral_real(rho_left, rho_right, x, y, v0, soft, D, dxdy2):
+def _coulomb_integral_real(rho_left, rho_right, x, y, v0, soft, dxdy2):
     """Evaluate a real Coulomb bilinear form without materializing its kernel."""
     n = rho_left.size
     row_sums = np.empty(n, dtype=np.float64)
-    finite_D = D <= 1e5
 
     for i in prange(n):
         total = 0.0
@@ -19,8 +18,6 @@ def _coulomb_integral_real(rho_left, rho_right, x, y, v0, soft, D, dxdy2):
             dy = y[i] - y[j]
             r_soft = np.sqrt(dx * dx + dy * dy + soft * soft)
             kernel = 1.0 / r_soft
-            if finite_D:
-                kernel -= 1.0 / np.sqrt(dx * dx + dy * dy + D * D)
             total += v0 * kernel * rho_right[j]
         row_sums[i] = total
 
@@ -28,11 +25,10 @@ def _coulomb_integral_real(rho_left, rho_right, x, y, v0, soft, D, dxdy2):
 
 
 @njit(cache=True, parallel=True)
-def _coulomb_integral_complex(rho_left, rho_right, x, y, v0, soft, D, dxdy2):
+def _coulomb_integral_complex(rho_left, rho_right, x, y, v0, soft, dxdy2):
     """Evaluate a complex Coulomb bilinear form without materializing its kernel."""
     n = rho_left.size
     row_sums = np.empty(n, dtype=np.complex128)
-    finite_D = D <= 1e5
 
     for i in prange(n):
         total = 0.0j
@@ -41,8 +37,6 @@ def _coulomb_integral_complex(rho_left, rho_right, x, y, v0, soft, D, dxdy2):
             dy = y[i] - y[j]
             r_soft = np.sqrt(dx * dx + dy * dy + soft * soft)
             kernel = 1.0 / r_soft
-            if finite_D:
-                kernel -= 1.0 / np.sqrt(dx * dx + dy * dy + D * D)
             total += v0 * kernel * rho_right[j]
         row_sums[i] = total
 
@@ -74,7 +68,7 @@ class HeteroBilayer:
     DEFAULT_THETA_DEG = 2.0
     DEFAULT_V = 6.6
     DEFAULT_PSI_DEG = 26.0
-    DEFAULT_SHELLS = 8
+    DEFAULT_SHELLS = 10
     DEFAULT_EPSILON = 15.0
 
 
@@ -102,13 +96,19 @@ class HeteroBilayer:
     E_SQUARED = 14440           # Coulomb's constant in units of meV * Angstroms
 
     def __init__(self, a0=DEFAULT_A0, theta_deg=DEFAULT_THETA_DEG, V=DEFAULT_V, psi_deg=DEFAULT_PSI_DEG,
-                 n_shells=DEFAULT_SHELLS, epsilon=DEFAULT_EPSILON):
+                 n_shells=DEFAULT_SHELLS, epsilon=DEFAULT_EPSILON, kmesh=DEFAULT_K_MESH, nx=DEFAULT_NX, ny=DEFAULT_NY, 
+                 scale=DEFAULT_SCALE):
         self.a0 = a0
         self.theta_deg = theta_deg
         self.V = V
         self.psi_deg = psi_deg
         self.n_shells = n_shells
         self.epsilon = epsilon
+
+        self.kmesh = kmesh
+        self.nx = nx
+        self.ny = ny
+        self.scale = scale
 
     # ------------------------------------------------------------------
     # Angles
@@ -613,8 +613,8 @@ class HeteroBilayer:
         Sample one parallelogram unit cell of the reciprocal lattice.
         i/Nx and j/Ny run over [0, 1), so no double-counting at boundaries.
         """
-        Nx = self.DEFAULT_K_MESH
-        Ny = self.DEFAULT_K_MESH
+        Nx = self.kmesh
+        Ny = self.kmesh
         i = np.arange(0, Nx)
         j = np.arange(0, Ny)
         ii, jj = np.meshgrid(i, j, indexing='ij')
@@ -898,7 +898,7 @@ class HeteroBilayer:
     # Tight-binding parameters
     # ------------------------------------------------------------------
 
-    def coulomb_potential(self, r, soft=1e-2, D=1e6):
+    def coulomb_potential(self, r, soft=1e-2):
         """
         Coulomb potential between two points in 2D.
 
@@ -914,11 +914,7 @@ class HeteroBilayer:
         """
         # Dimensionless units converted through aM
         V0 = self.E_SQUARED / (self.epsilon * self.aM)
-        
-        if D > 1e5:
-            radial = 1 / np.sqrt(r**2 + soft**2)
-        else:
-            radial = 1 / np.sqrt(r**2 + soft**2) - 1 / np.sqrt(r**2 + D**2)
+        radial = 1 / np.sqrt(r**2 + soft**2)
 
         return V0 * radial
 
@@ -936,8 +932,8 @@ class HeteroBilayer:
 
         delta_center = [np.zeros(2)]
 
-        x = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NX)
-        y = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NY)
+        x = np.linspace(-self.scale, self.scale, self.nx)
+        y = np.linspace(-self.scale, self.scale, self.ny)
         X, Y = np.meshgrid(x, y)
 
         wannier0 = self.wannier_function(X, Y, trial_centers=delta_center)
@@ -1005,8 +1001,8 @@ class HeteroBilayer:
                 shifts.append(2 * self.a2)
 
         delta_center = [np.zeros(2)]
-        x = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NX)
-        y = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NY)
+        x = np.linspace(-self.scale, self.scale, self.nx)
+        y = np.linspace(-self.scale, self.scale, self.ny)
         X, Y = np.meshgrid(x, y)
 
         dx_grid = np.abs(X[0, 1] - X[0, 0])
@@ -1031,7 +1027,6 @@ class HeteroBilayer:
                 Y.ravel(),
                 self.E_SQUARED / (self.epsilon * self.aM),
                 softness,
-                1e6,
                 (dx_grid * dy_grid)**2,
             )
             interactions.append(integral)
@@ -1051,8 +1046,8 @@ class HeteroBilayer:
                 shifts.append(2 * self.a2)
 
         delta_center = [np.zeros(2)]
-        x = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NX)
-        y = np.linspace(-self.DEFAULT_SCALE, self.DEFAULT_SCALE, self.DEFAULT_NY)
+        x = np.linspace(-self.scale, self.scale, self.nx)
+        y = np.linspace(-self.scale, self.scale, self.ny)
         X, Y = np.meshgrid(x, y)
 
         dx_grid = np.abs(X[0, 1] - X[0, 0])
@@ -1075,7 +1070,6 @@ class HeteroBilayer:
                 Y.ravel(),
                 self.E_SQUARED / (self.epsilon * self.aM),
                 softness,
-                1e6,
                 (dx_grid * dy_grid)**2,
             )
             interactions.append(integral)
@@ -1144,7 +1138,7 @@ class HeteroBilayer:
 
         return integral
     
-    def nearest_neighbour_interaction(self, X, Y, k_points, sublattice1, sublattice2, order=1, D=1e6, Rshift=None):
+    def nearest_neighbour_interaction(self, X, Y, k_points, sublattice1, sublattice2, order=1, Rshift=None):
         if order == 0:
             R0 = np.zeros(2)
         elif order == 1:
@@ -1185,13 +1179,13 @@ class HeteroBilayer:
         dist = np.linalg.norm(dr, axis=-1)
 
         softness = np.min([dx_grid, dy_grid]) / 2
-        K = self.coulomb_potential(dist, soft=softness, D=D)      # shape (N, N)
+        K = self.coulomb_potential(dist, soft=softness)      # shape (N, N)
 
         integral = (dx_grid * dy_grid)**2 * np.dot(rho2, K @ rho1)
         
         return integral
     
-    def exchange_interaction(self, X, Y, k_points, order=1, D=1e6):
+    def exchange_interaction(self, X, Y, k_points, order=1):
         if order == 0:
             R0 = np.zeros(2)
         elif order == 1:
@@ -1214,8 +1208,198 @@ class HeteroBilayer:
         dist = np.linalg.norm(dr, axis=-1)
 
         softness = np.min([dx_grid, dy_grid])/2
-        K = self.coulomb_potential(dist, soft=softness, D=D)      # shape (N, N)
+        K = self.coulomb_potential(dist, soft=softness)      # shape (N, N)
 
         integral = (dx_grid * dy_grid)**2 * np.vdot(a, K @ a)
         
         return integral
+
+    def _prepare_hopping_2band(self, k_points, trial_centers, bands):
+        """Prepare projection data shared by hopping_2band evaluations."""
+        trial_centers = np.asarray(trial_centers)
+        n_k = k_points.shape[0]
+        H_all = self.H_k_all(k_points)
+        _, eigenvectors = np.linalg.eigh(H_all)
+        zk = eigenvectors[:, :, list(bands)]
+
+        g_vecs = np.array([g for g, _ in self.basis])
+        kG = k_points[:, None, :] + g_vecs[None, :, :]
+        tphase = np.exp(-1j * np.einsum(
+            "kGd,id->kGi", kG, trial_centers
+        ))
+        O = np.einsum("kGa,kGi->kai", np.conj(zk), tphase)
+
+        C = np.empty_like(O)
+        smin = np.empty(n_k)
+        for kk in range(n_k):
+            S = O[kk].conj().T @ O[kk]
+            d, V = np.linalg.eigh(S)
+            smin[kk] = np.sqrt(max(d.min(), 0.0))
+            d = np.maximum(d, 1e-12)
+            S_inv_sqrt = V @ np.diag(1 / np.sqrt(d)) @ V.conj().T
+            C[kk] = O[kk] @ S_inv_sqrt
+        self._last_smin = smin.min()
+        return np.einsum("kai,kGa->kGi", C, zk), g_vecs
+
+    def _evaluate_hopping_2band(self, X, Y, k_points, prepared, R0=None):
+        """Evaluate a projected Wannier function from prepared data."""
+        if R0 is None:
+            R0 = np.zeros(2)
+
+        x, y = np.asarray(X), np.asarray(Y)
+        orig_shape = x.shape
+        xf, yf = x.ravel(), y.ravel()
+        n_k = k_points.shape[0]
+        ztilde, g_vecs = prepared
+        n_w = ztilde.shape[-1]
+
+        g_phase = np.exp(1j * (
+            g_vecs[:, 0, None] * xf[None, :]
+            + g_vecs[:, 1, None] * yf[None, :]
+        ))
+        k_phase = np.exp(1j * (
+            k_points[:, 0, None] * xf[None, :]
+            + k_points[:, 1, None] * yf[None, :]
+        ))
+        shift = np.exp(-1j * (k_points @ R0))
+
+        u = np.einsum("kGi,GP->kiP", ztilde, g_phase)
+        bloch = u * k_phase[:, None, :]
+        bloch *= shift[:, None, None]
+        wannier = bloch.sum(axis=0) / (n_k * np.sqrt(self.A_unit_cell))
+        res = wannier.reshape((n_w,) + orig_shape)
+        return res[0, :, :] if n_w == 1 else res
+
+    def hopping_2band(self, orders, sublattice1, sublattice2):
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2 - self.a1)
+
+        ## Trial functions centers
+        RA = np.zeros(2)
+        RB = (2 * self.a1 - self.a2) / 3
+        delta_centers = np.array([RA, RB])
+
+        ind1 = {"A": 0, "B": 1}[sublattice1]
+        ind2 = {"A": 0, "B": 1}[sublattice2]
+
+        x = np.linspace(-self.scale, self.scale, self.nx)
+        y = np.linspace(-self.scale, self.scale, self.ny)
+        X, Y = np.meshgrid(x, y)
+
+        k_points = self.mesh_k_unit_cell()
+        prepared = self._prepare_hopping_2band(
+            k_points, delta_centers, bands=(-2, -1)
+        )
+        wannier0 = self._evaluate_hopping_2band(
+            X, Y, k_points, prepared
+        )[ind1, :, :]
+        wannier_xp = self._evaluate_hopping_2band(
+            X + self.DX, Y, k_points, prepared
+        )[ind1, :, :]
+        wannier_xm = self._evaluate_hopping_2band(
+            X - self.DX, Y, k_points, prepared
+        )[ind1, :, :]
+        wannier_yp = self._evaluate_hopping_2band(
+            X, Y + self.DX, k_points, prepared
+        )[ind1, :, :]
+        wannier_ym = self._evaluate_hopping_2band(
+            X, Y - self.DX, k_points, prepared
+        )[ind1, :, :]
+
+        laplacian = (wannier_xp + wannier_xm + wannier_yp + wannier_ym - 4 * wannier0) / (self.aM * self.DX)**2
+
+        hopping_integrals = []
+        for Rshift in shifts:
+            wannier2 = self._evaluate_hopping_2band(
+                X, Y, k_points, prepared, R0=Rshift
+            )[ind2, :, :]
+
+            integralT = 0.5 * (self.HBAR2_M / self.MSTAR) * np.trapz(
+                np.trapz(np.conj(wannier2) * laplacian, X[0,:], axis=1),
+                Y[:,0], axis=0
+            )
+
+            integralV = np.trapz(
+                np.trapz(np.conj(wannier2) * self.moire_potential(X, Y) * wannier0, X[0,:], axis=1),
+                Y[:,0], axis=0
+            )
+
+            integral = integralT + integralV
+            hopping_integrals.append(integral)
+
+        return hopping_integrals
+
+    def hopping_2band_kspace(self, orders, sublattice1, sublattice2):
+        """Calculate two-band hoppings by Fourier transforming the projected Hamiltonian.
+
+        Parameters
+        ----------
+        orders : iterable of int
+            ``0`` selects the onsite term and ``1`` selects the nearest-neighbor
+            displacement ``a2 - a1``.
+        sublattice1, sublattice2 : {"A", "B"}
+            Row and column sublattice labels of the hopping matrix element.
+
+        Returns
+        -------
+        list of complex
+            Fourier coefficients for the requested displacements.
+        """
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2 - self.a1)
+
+        ind1 = {"A": 0, "B": 1}[sublattice1]
+        ind2 = {"A": 0, "B": 1}[sublattice2]
+        trial_centers = np.array([
+            np.zeros(2),
+            (2 * self.a1 - self.a2) / 3,
+        ])
+        k_points = self.mesh_k_unit_cell()
+        bands = (-2, -1)
+
+        H_all = self.H_k_all(k_points)
+        eigenvalues, eigenvectors = np.linalg.eigh(H_all)
+        zk = eigenvectors[:, :, list(bands)]
+
+        g_vecs = np.array([g for g, _ in self.basis])
+        kG = k_points[:, None, :] + g_vecs[None, :, :]
+        tphase = np.exp(-1j * np.einsum(
+            "kGd,id->kGi", kG, trial_centers
+        ))
+        overlap = np.einsum("kGa,kGi->kai", np.conj(zk), tphase)
+
+        n_k = k_points.shape[0]
+        n_w = len(bands)
+        gauge = np.empty_like(overlap)
+        for kk in range(n_k):
+            overlap_metric = overlap[kk].conj().T @ overlap[kk]
+            metric_values, metric_vectors = np.linalg.eigh(overlap_metric)
+            metric_values = np.maximum(metric_values, 1e-12)
+            inverse_sqrt = metric_vectors @ np.diag(
+                1 / np.sqrt(metric_values)
+            ) @ metric_vectors.conj().T
+            gauge[kk] = overlap[kk] @ inverse_sqrt
+
+        selected_energies = eigenvalues[:, list(bands)]
+        projected_hamiltonian = np.einsum(
+            "kai,ka,kaj->kij",
+            np.conj(gauge),
+            selected_energies,
+            gauge,
+        )
+
+        return [
+            np.mean(
+                projected_hamiltonian[:, ind2, ind1]
+                * np.exp(1j * (k_points @ Rshift))
+            )
+            for Rshift in shifts
+        ]
