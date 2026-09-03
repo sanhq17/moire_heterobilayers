@@ -54,7 +54,7 @@ class HeteroBilayer:
     Parameters
     ----------
     a0       : float  Monolayer lattice constant [Å]. Default 3.32 Å (WSe₂).
-    theta_deg: float  Twist angle between layers [degrees]. Default 2.0°.
+    theta_deg: float  Twist angle between layers [degrees]. Default 2.5°.
     V        : float  Moiré potential amplitude [meV]. Default 6.6 meV.
     psi_deg  : float  Moiré potential phase [degrees]. Default 26.0°.
     n_shells : int    Number of reciprocal-lattice shells to include
@@ -65,7 +65,7 @@ class HeteroBilayer:
     # Default parameters for a twisted heterobilayer (e.g., WSe₂/MoSe₂)
     # ------------------------------------------------------------------
     DEFAULT_A0 = 3.32    
-    DEFAULT_THETA_DEG = 2.0
+    DEFAULT_THETA_DEG = 2.5
     DEFAULT_V = 6.6
     DEFAULT_PSI_DEG = 26.0
     DEFAULT_SHELLS = 10
@@ -1291,32 +1291,18 @@ class HeteroBilayer:
         X, Y = np.meshgrid(x, y)
 
         k_points = self.mesh_k_unit_cell()
-        prepared = self._prepare_hopping_2band(
-            k_points, delta_centers, bands=(-2, -1)
-        )
-        wannier0 = self._evaluate_hopping_2band(
-            X, Y, k_points, prepared
-        )[ind1, :, :]
-        wannier_xp = self._evaluate_hopping_2band(
-            X + self.DX, Y, k_points, prepared
-        )[ind1, :, :]
-        wannier_xm = self._evaluate_hopping_2band(
-            X - self.DX, Y, k_points, prepared
-        )[ind1, :, :]
-        wannier_yp = self._evaluate_hopping_2band(
-            X, Y + self.DX, k_points, prepared
-        )[ind1, :, :]
-        wannier_ym = self._evaluate_hopping_2band(
-            X, Y - self.DX, k_points, prepared
-        )[ind1, :, :]
+        prepared = self._prepare_hopping_2band(k_points, delta_centers, bands=(-2, -1))
+        wannier0 = self._evaluate_hopping_2band(X, Y, k_points, prepared)[ind1, :, :]
+        wannier_xp = self._evaluate_hopping_2band(X + self.DX, Y, k_points, prepared)[ind1, :, :]
+        wannier_xm = self._evaluate_hopping_2band(X - self.DX, Y, k_points, prepared)[ind1, :, :]
+        wannier_yp = self._evaluate_hopping_2band(X, Y + self.DX, k_points, prepared)[ind1, :, :]
+        wannier_ym = self._evaluate_hopping_2band(X, Y - self.DX, k_points, prepared)[ind1, :, :]
 
         laplacian = (wannier_xp + wannier_xm + wannier_yp + wannier_ym - 4 * wannier0) / (self.aM * self.DX)**2
 
         hopping_integrals = []
         for Rshift in shifts:
-            wannier2 = self._evaluate_hopping_2band(
-                X, Y, k_points, prepared, R0=Rshift
-            )[ind2, :, :]
+            wannier2 = self._evaluate_hopping_2band(X, Y, k_points, prepared, R0=Rshift)[ind2, :, :]
 
             integralT = 0.5 * (self.HBAR2_M / self.MSTAR) * np.trapz(
                 np.trapz(np.conj(wannier2) * laplacian, X[0,:], axis=1),
@@ -1403,3 +1389,117 @@ class HeteroBilayer:
             )
             for Rshift in shifts
         ]
+
+    def interaction_2band(self, orders, sublattice1, sublattice2):
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2 - self.a1)
+
+        ## Trial functions centers
+        RA = np.zeros(2)
+        RB = (2 * self.a1 - self.a2) / 3
+        delta_centers = np.array([RA, RB])
+
+        ind1 = {"A": 0, "B": 1}[sublattice1]
+        ind2 = {"A": 0, "B": 1}[sublattice2]
+
+        x = np.linspace(-self.scale, self.scale, self.nx)
+        y = np.linspace(-self.scale, self.scale, self.ny)
+        X, Y = np.meshgrid(x, y)
+
+        dx_grid = np.abs(X[0, 1] - X[0, 0])
+        dy_grid = np.abs(Y[1, 0] - Y[0, 0])
+
+        wannier1 = self.wannier_function(X, Y, trial_centers=delta_centers)[ind1, :, :]
+        density1 = np.abs(wannier1)**2
+        rho1 = density1.ravel()
+
+        interactions = []
+        for Rshift in shifts:
+            wannier2 = self.wannier_function(X, Y, trial_centers=delta_centers, R0=Rshift)[ind2, :, :]
+            density2 = np.abs(wannier2)**2
+            rho2 = density2.ravel()
+
+            softness = np.min([dx_grid, dy_grid]) / 2
+            integral = _coulomb_integral_real(
+                rho2,
+                rho1,
+                X.ravel(),
+                Y.ravel(),
+                self.E_SQUARED / (self.epsilon * self.aM),
+                softness,
+                (dx_grid * dy_grid)**2,
+            )
+            interactions.append(integral)
+
+        return interactions
+
+    def exchange_2band(self, orders, sublattice1, sublattice2):
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2 - self.a1)
+
+        ## Trial functions centers
+        RA = np.zeros(2)
+        RB = (2 * self.a1 - self.a2) / 3
+        delta_centers = np.array([RA, RB])
+
+        ind1 = {"A": 0, "B": 1}[sublattice1]
+        ind2 = {"A": 0, "B": 1}[sublattice2]
+
+        x = np.linspace(-self.scale, self.scale, self.nx)
+        y = np.linspace(-self.scale, self.scale, self.ny)
+        X, Y = np.meshgrid(x, y)
+
+        dx_grid = np.abs(X[0, 1] - X[0, 0])
+        dy_grid = np.abs(Y[1, 0] - Y[0, 0])
+
+        wannier1 = self.wannier_function(X, Y, trial_centers=delta_centers)[ind1, :, :]
+
+        interactions = []
+        for Rshift in shifts:
+            wannier2 = self.wannier_function(X, Y, trial_centers=delta_centers, R0=Rshift)[ind2, :, :]
+            A = np.conj(wannier1) * wannier2
+            a = A.ravel()
+    
+            softness = np.min([dx_grid, dy_grid])/2
+            integral = _coulomb_integral_complex(
+                np.conj(a),
+                a,
+                X.ravel(),
+                Y.ravel(),
+                self.E_SQUARED / (self.epsilon * self.aM),
+                softness,
+                (dx_grid * dy_grid)**2,
+            )
+            interactions.append(integral)
+
+        return interactions
+
+    def spin_coupling_2band(self):
+        hoppingsA = self.hopping_2band_kspace(orders=[0, 1], sublattice1="A", sublattice2="A")
+        onsiteA, tAA = hoppingsA[0], hoppingsA[1]
+
+        onsiteB = self.hopping_2band_kspace(orders=[0], sublattice1="B", sublattice2="B")[0]
+        Delta = onsiteA - onsiteB
+
+        shift = (onsiteB + onsiteA) / 2
+
+        tAB = self.hopping_2band_kspace(orders=[0], sublattice1="A", sublattice2="B")[0]
+
+        UA = self.interaction_2band(orders=[0], sublattice1="A", sublattice2="A")[0]
+        UB = self.interaction_2band(orders=[0], sublattice1="B", sublattice2="B")[0]
+        XA = self.exchange_2band(orders=[1], sublattice1="A", sublattice2="A")[0]
+
+        ref_energy = (self.HBAR2_M / self.aM**2) * np.linalg.norm(self.kappa)**2
+
+        J = (4 * (tAA**2) / UA) + (4 * (tAB**2) / (UA * Delta**2)) * (UA + 2 * Delta) * (-tAA) + (4 * (tAB**4) / (UA * Delta**2)) * (2 * UA + UB + 2 * Delta) / (UB + 2 * Delta)  - 2 * XA
+        J /= ref_energy
+
+        return J
