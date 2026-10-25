@@ -68,14 +68,14 @@ class HeteroBilayer:
     DEFAULT_THETA_DEG = 2.5
     DEFAULT_V = 6.6
     DEFAULT_PSI_DEG = 26.0
-    DEFAULT_SHELLS = 10
+    DEFAULT_SHELLS = 9
     DEFAULT_EPSILON = 15.0
 
 
     DEFAULT_K_MESH = 21
-    DEFAULT_NX = 80
-    DEFAULT_NY = 80
-    DEFAULT_SCALE = 4.0
+    DEFAULT_NX = 100
+    DEFAULT_NY = 100
+    DEFAULT_SCALE = 5.0
 
     # ------------------------------------------------------------------
     # Triangular lattice parameters
@@ -687,6 +687,188 @@ class HeteroBilayer:
         else:
             return res
 
+    def wannier_function_v2(self, X, Y, trial_centers, trial_types, bands=(-1,), R0=None, sigma=1.0):
+        """
+        Projective Wannier functions from localized s/px/py Gaussian trials.
+
+        trial_centers : array, shape (n_w, 2)
+            Center of each trial orbital.
+        trial_types : list[str]
+            E.g. ["s", "px"] or ["s", "px", "py"].
+
+        Returns
+        -------
+        wannier : array, shape (n_w, *X.shape)
+        """
+        if R0 is None:
+            R0 = np.zeros(2)
+
+        x, y = np.asarray(X), np.asarray(Y)
+        orig_shape = x.shape
+        xf, yf = x.ravel(), y.ravel()
+
+        k_points = self.mesh_k_unit_cell()
+        n_k = k_points.shape[0]
+
+        trial_centers = np.asarray(trial_centers, dtype=float)
+        n_w = len(trial_types)
+
+        if trial_centers.shape != (n_w, 2):
+            raise ValueError("trial_centers must have shape (n_w, 2)")
+
+        # ------------------------------------------------------------
+        # Bloch eigenvectors
+        # ------------------------------------------------------------
+        H_all = self.H_k_all(k_points)
+        _, eigenvectors = np.linalg.eigh(H_all)
+
+        zk = eigenvectors[:, :, list(bands)]
+
+        if zk.shape[-1] != n_w:
+            raise ValueError(
+                f"Need {n_w} bands for {n_w} trial orbitals, "
+                f"but got {zk.shape[-1]}"
+            )
+
+        # ------------------------------------------------------------
+        # Plane-wave momenta q = k + G
+        # ------------------------------------------------------------
+        g_vecs = np.array([g for g, _ in self.basis])
+
+        kG = (
+            k_points[:, None, :]
+            + g_vecs[None, :, :]
+        )                                    # (k, G, 2)
+
+        qx = kG[..., 0]
+        qy = kG[..., 1]
+        q2 = qx**2 + qy**2
+
+        # Gaussian envelope
+        gauss = np.exp(-0.5 * sigma**2 * q2)
+
+        # ------------------------------------------------------------
+        # Trial orbitals in Fourier space
+        # ------------------------------------------------------------
+        t = np.zeros((n_k, len(g_vecs), n_w), dtype=complex)
+
+        for i, (center, typ) in enumerate(zip(trial_centers, trial_types)):
+
+            phase = np.exp(
+                -1j * np.einsum("kGd,d->kG", kG, center)
+            )
+
+            if typ == "s":
+                orbital = gauss
+
+            elif typ == "px":
+                orbital = qx * gauss
+
+            elif typ == "py":
+                orbital = qy * gauss
+
+            else:
+                raise ValueError(
+                    f"Unknown trial type {typ!r}. "
+                    "Use 's', 'px', or 'py'."
+                )
+
+            t[..., i] = orbital * phase
+
+        # Normalize each trial orbital
+        norm = np.sqrt(np.sum(np.abs(t)**2, axis=1))
+        t /= norm[:, None, :]
+
+        # ------------------------------------------------------------
+        # Projection
+        #
+        # O_{alpha,i} = <psi_alpha,k | g_i,k>
+        # ------------------------------------------------------------
+        O = np.einsum(
+            "kGa,kGi->kai",
+            np.conj(zk),
+            t
+        )
+
+        # ------------------------------------------------------------
+        # Symmetric orthogonalization
+        # ------------------------------------------------------------
+        C = np.empty_like(O)
+        smin = np.empty(n_k)
+
+        for kk in range(n_k):
+
+            S = O[kk].conj().T @ O[kk]
+
+            d, V = np.linalg.eigh(S)
+
+            smin[kk] = np.sqrt(max(d.min(), 0.0))
+
+            if d.min() < 1e-10:
+                raise RuntimeError(
+                    f"Projection is ill-conditioned at k={kk}: "
+                    f"smallest singular value = {smin[kk]:.3e}"
+                )
+
+            S_inv_sqrt = (
+                V
+                @ np.diag(1.0 / np.sqrt(d))
+                @ V.conj().T
+            )
+
+            C[kk] = O[kk] @ S_inv_sqrt
+
+        self._last_smin = smin.min()
+
+        # ------------------------------------------------------------
+        # Gauge-fixed plane-wave coefficients
+        #
+        # ztilde_{G,i} = sum_alpha z_{G,alpha} C_{alpha,i}
+        # ------------------------------------------------------------
+        ztilde = np.einsum(
+            "kai,kGa->kGi",
+            C,
+            zk
+        )
+
+        # ------------------------------------------------------------
+        # Fourier transform to real space
+        # ------------------------------------------------------------
+        g_phase = np.exp(
+            1j * (
+                g_vecs[:, 0, None] * xf[None, :]
+                + g_vecs[:, 1, None] * yf[None, :]
+            )
+        )
+
+        k_phase = np.exp(
+            1j * (
+                k_points[:, 0, None] * xf[None, :]
+                + k_points[:, 1, None] * yf[None, :]
+            )
+        )
+
+        shift = np.exp(
+            -1j * (k_points @ R0)
+        )
+
+        u = np.einsum(
+            "kGi,GP->kiP",
+            ztilde,
+            g_phase
+        )
+
+        bloch = u * k_phase[:, None, :]
+        bloch *= shift[:, None, None]
+
+        wannier = (
+            bloch.sum(axis=0)
+            / (n_k * np.sqrt(self.A_unit_cell))
+        )
+
+        return wannier.reshape((n_w,) + orig_shape)
+
+
     def integrate_wannier(self, fun, wannier, X, Y):
         """
         Computes the expectation value in real space of a function 
@@ -1033,6 +1215,77 @@ class HeteroBilayer:
 
         return interactions
 
+    def interaction_1band_kspace(self, orders):
+        r"""Calculate single-band Coulomb matrix elements in reciprocal space.
+
+        The Wannier density is Fourier transformed on the real-space grid and
+        the interaction is evaluated as
+
+        .. math::
+
+            U(R) = \frac{1}{L_x L_y}\sum_q V(q)|\rho(q)|^2 e^{i q\cdot R},
+
+        with ``V(q) = 2*pi*V0/|q|`` for the two-dimensional Coulomb
+        potential.  The divergent ``q=0`` component is omitted, corresponding
+        to the usual neutralizing-background convention for a periodic
+        Coulomb interaction.
+
+        Parameters
+        ----------
+        orders : iterable of int
+            ``0`` selects the onsite term, ``1`` the nearest-neighbour
+            displacement ``a2``, ``2`` the displacement ``a2 + a1``, and
+            ``3`` the displacement ``2*a2``.
+
+        Returns
+        -------
+        list of complex
+            Coulomb matrix elements for the requested displacements.
+        """
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2)
+            elif order == 2:
+                shifts.append(self.a2 + self.a1)
+            elif order == 3:
+                shifts.append(2 * self.a2)
+
+        x = np.linspace(-self.scale, self.scale, self.nx, endpoint=False)
+        y = np.linspace(-self.scale, self.scale, self.ny, endpoint=False)
+        X, Y = np.meshgrid(x, y)
+        wannier = self.wannier_function(
+            X, Y, trial_centers=[np.zeros(2)]
+        )
+        density = np.abs(wannier) ** 2
+
+        dx_grid = x[1] - x[0]
+        dy_grid = y[1] - y[0]
+        density_q = np.fft.fft2(density) * dx_grid * dy_grid
+        qx = 2 * np.pi * np.fft.fftfreq(self.nx, d=dx_grid)
+        qy = 2 * np.pi * np.fft.fftfreq(self.ny, d=dy_grid)
+        QX, QY = np.meshgrid(qx, qy)
+        q = np.sqrt(QX**2 + QY**2)
+
+        Vq = np.zeros_like(q)
+        nonzero_q = q > 0
+        V0 = self.E_SQUARED / (self.epsilon * self.aM)
+        Vq[nonzero_q] = 2 * np.pi * V0 / q[nonzero_q]
+        density_factor = Vq * np.abs(density_q) ** 2
+        area = (x[-1] - x[0] + dx_grid) * (y[-1] - y[0] + dy_grid)
+
+        return [
+            np.sum(
+                density_factor
+                * np.exp(1j * (QX * Rshift[0] + QY * Rshift[1]))
+            ) / area
+            for Rshift in shifts
+        ]
+
+    
+
     def exchange_1band(self, orders=[1]):
         shifts = []
         for order in orders:
@@ -1076,10 +1329,80 @@ class HeteroBilayer:
 
         return interactions
 
+    def exchange_1band_kspace(self, orders=[1]):
+        r"""Calculate single-band exchange matrix elements in reciprocal space.
+
+        For a displacement ``R``, the exchange overlap is
+        ``f_R(r) = W_0(r)^* W_R(r)``.  Its Coulomb self-interaction is
+        evaluated in reciprocal space as
+
+        .. math::
+
+            X(R) = \frac{1}{L_x L_y}\sum_q V(q)|f_R(q)|^2,
+
+        where ``V(q) = 2*pi*V0/|q|``.  The divergent ``q=0`` component is
+        omitted, matching ``interaction_1band_kspace``.
+
+        Parameters
+        ----------
+        orders : iterable of int
+            ``0`` selects the onsite term, ``1`` the nearest-neighbour
+            displacement ``a2``, ``2`` the displacement ``a2 + a1``, and
+            ``3`` the displacement ``2*a2``.
+
+        Returns
+        -------
+        list of complex
+            Exchange matrix elements for the requested displacements.
+        """
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2)
+            elif order == 2:
+                shifts.append(self.a2 + self.a1)
+            elif order == 3:
+                shifts.append(2 * self.a2)
+
+        x = np.linspace(-self.scale, self.scale, self.nx, endpoint=False)
+        y = np.linspace(-self.scale, self.scale, self.ny, endpoint=False)
+        X, Y = np.meshgrid(x, y)
+        wannier1 = self.wannier_function(
+            X, Y, trial_centers=[np.zeros(2)]
+        )
+
+        dx_grid = x[1] - x[0]
+        dy_grid = y[1] - y[0]
+        qx = 2 * np.pi * np.fft.fftfreq(self.nx, d=dx_grid)
+        qy = 2 * np.pi * np.fft.fftfreq(self.ny, d=dy_grid)
+        QX, QY = np.meshgrid(qx, qy)
+        q = np.sqrt(QX**2 + QY**2)
+
+        Vq = np.zeros_like(q)
+        nonzero_q = q > 0
+        V0 = self.E_SQUARED / (self.epsilon * self.aM)
+        Vq[nonzero_q] = 2 * np.pi * V0 / q[nonzero_q]
+        area = (x[-1] - x[0] + dx_grid) * (y[-1] - y[0] + dy_grid)
+
+        exchanges = []
+        for Rshift in shifts:
+            wannier2 = self.wannier_function(
+                X, Y, trial_centers=[np.zeros(2)], R0=Rshift
+            )
+            overlap = np.conj(wannier1) * wannier2
+            overlap_q = np.fft.fft2(overlap) * dx_grid * dy_grid
+            exchanges.append(
+                np.sum(Vq * np.abs(overlap_q)**2) / area
+            )
+
+        return exchanges
+
     def spin_coupling_1band(self):
         t1 = np.real( self.hopping_1band_kspace([1])[0] )
-        U0 = np.real( self.interaction_1band([0])[0] )
-        X = np.real( self.exchange_1band([1])[0] )
+        U0 = np.real( self.interaction_1band_kspace([0])[0] )
+        X = np.real( self.exchange_1band_kspace([1])[0] )
 
         ref_energy = (self.HBAR2_M / self.aM**2) * np.linalg.norm(self.kappa)**2
 
@@ -1437,6 +1760,123 @@ class HeteroBilayer:
 
         return interactions
 
+    def interaction_2band_kspace(self, orders, sublattice1, sublattice2):
+        r"""Calculate two-band Coulomb matrix elements in reciprocal space.
+
+        Parameters
+        ----------
+        orders : iterable of int
+            ``0`` selects the onsite term and ``1`` selects the displacement
+            ``a2 - a1``.
+        sublattice1, sublattice2 : {"A", "B"}
+            Sublattice labels for the first and second Wannier densities.
+
+        Returns
+        -------
+        list of complex
+            Coulomb matrix elements for the requested displacements.
+        """
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2 - self.a1)
+
+        ind1 = {"A": 0, "B": 1}[sublattice1]
+        ind2 = {"A": 0, "B": 1}[sublattice2]
+        trial_centers = np.array([
+            np.zeros(2),
+            (2 * self.a1 - self.a2) / 3,
+        ])
+
+        x = np.linspace(-self.scale, self.scale, self.nx, endpoint=False)
+        y = np.linspace(-self.scale, self.scale, self.ny, endpoint=False)
+        X, Y = np.meshgrid(x, y)
+        wannier = self.wannier_function(
+            X, Y, trial_centers=trial_centers, bands=(-2, -1)
+        )
+        density1 = np.abs(wannier[ind1]) ** 2
+        density2 = np.abs(wannier[ind2]) ** 2
+
+        dx_grid = x[1] - x[0]
+        dy_grid = y[1] - y[0]
+        density1_q = np.fft.fft2(density1) * dx_grid * dy_grid
+        density2_q = np.fft.fft2(density2) * dx_grid * dy_grid
+        qx = 2 * np.pi * np.fft.fftfreq(self.nx, d=dx_grid)
+        qy = 2 * np.pi * np.fft.fftfreq(self.ny, d=dy_grid)
+        QX, QY = np.meshgrid(qx, qy)
+        q = np.sqrt(QX**2 + QY**2)
+
+        Vq = np.zeros_like(q)
+        nonzero_q = q > 0
+        V0 = self.E_SQUARED / (self.epsilon * self.aM)
+        Vq[nonzero_q] = 2 * np.pi * V0 / q[nonzero_q]
+        density_factor = Vq * np.conj(density2_q) * density1_q
+        area = (x[-1] - x[0] + dx_grid) * (y[-1] - y[0] + dy_grid)
+
+        return [
+            np.sum(
+                density_factor
+                * np.exp(1j * (QX * Rshift[0] + QY * Rshift[1]))
+            ) / area
+            for Rshift in shifts
+        ]
+
+    def exchange_2band_kspace(self, orders, sublattice1, sublattice2):
+        r"""Calculate two-band exchange matrix elements in reciprocal space.
+
+        The exchange density is
+        ``A_R(r) = conj(W_1(r)) W_2(r - R)``.  Its Coulomb self-energy is
+        evaluated using ``V(q) = 2*pi*V0/|q|``; the divergent ``q=0``
+        component is omitted.
+        """
+        shifts = []
+        for order in orders:
+            if order == 0:
+                shifts.append(np.zeros(2))
+            elif order == 1:
+                shifts.append(self.a2 - self.a1)
+
+        ind1 = {"A": 0, "B": 1}[sublattice1]
+        ind2 = {"A": 0, "B": 1}[sublattice2]
+        trial_centers = np.array([
+            np.zeros(2),
+            (2 * self.a1 - self.a2) / 3,
+        ])
+
+        x = np.linspace(-self.scale, self.scale, self.nx, endpoint=False)
+        y = np.linspace(-self.scale, self.scale, self.ny, endpoint=False)
+        X, Y = np.meshgrid(x, y)
+        wannier1 = self.wannier_function(
+            X, Y, trial_centers=trial_centers, bands=(-2, -1)
+        )[ind1]
+
+        dx_grid = x[1] - x[0]
+        dy_grid = y[1] - y[0]
+        qx = 2 * np.pi * np.fft.fftfreq(self.nx, d=dx_grid)
+        qy = 2 * np.pi * np.fft.fftfreq(self.ny, d=dy_grid)
+        QX, QY = np.meshgrid(qx, qy)
+        q = np.sqrt(QX**2 + QY**2)
+        Vq = np.zeros_like(q)
+        nonzero_q = q > 0
+        V0 = self.E_SQUARED / (self.epsilon * self.aM)
+        Vq[nonzero_q] = 2 * np.pi * V0 / q[nonzero_q]
+        area = (x[-1] - x[0] + dx_grid) * (y[-1] - y[0] + dy_grid)
+
+        interactions = []
+        for Rshift in shifts:
+            wannier2 = self.wannier_function(
+                X, Y, trial_centers=trial_centers,
+                bands=(-2, -1), R0=Rshift
+            )[ind2]
+            overlap_q = np.fft.fft2(
+                np.conj(wannier1) * wannier2
+            ) * dx_grid * dy_grid
+            interactions.append(np.sum(Vq * np.abs(overlap_q)**2) / area)
+
+        return interactions
+
     def exchange_2band(self, orders, sublattice1, sublattice2):
         shifts = []
         for order in orders:
@@ -1489,13 +1929,11 @@ class HeteroBilayer:
         onsiteB = self.hopping_2band_kspace(orders=[0], sublattice1="B", sublattice2="B")[0]
         Delta = onsiteA - onsiteB
 
-        shift = (onsiteB + onsiteA) / 2
-
         tAB = self.hopping_2band_kspace(orders=[0], sublattice1="A", sublattice2="B")[0]
 
-        UA = self.interaction_2band(orders=[0], sublattice1="A", sublattice2="A")[0]
-        UB = self.interaction_2band(orders=[0], sublattice1="B", sublattice2="B")[0]
-        XA = self.exchange_2band(orders=[1], sublattice1="A", sublattice2="A")[0]
+        UA = self.interaction_2band_kspace(orders=[0], sublattice1="A", sublattice2="A")[0]
+        UB = self.interaction_2band_kspace(orders=[0], sublattice1="B", sublattice2="B")[0]
+        XA = self.exchange_2band_kspace(orders=[1], sublattice1="A", sublattice2="A")[0]
 
         ref_energy = (self.HBAR2_M / self.aM**2) * np.linalg.norm(self.kappa)**2
 
